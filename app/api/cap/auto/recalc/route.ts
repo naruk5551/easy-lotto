@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { CapMode, Prisma } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 
 const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
 type Category = (typeof CATEGORY_VALUES)[number]
@@ -71,9 +71,9 @@ export async function POST(req: NextRequest) {
     // ไม่มีข้อมูลในช่วง → อัปเดต threshold = 0 แล้วคืนค่า
     if (!rows.length) {
       const data: any = {
-        mode: CapMode.AUTO,
+        mode: 'AUTO' as any,
         [fm.count]: topK,
-        [fm.threshold]: new Prisma.Decimal(0),
+        [fm.threshold]: 0 as any,
         [fm.effectiveAt]: new Date(),
       }
       const updated = await prisma.capRule.update({ where: { id: 1 }, data })
@@ -102,9 +102,9 @@ export async function POST(req: NextRequest) {
 
     // อัปเดต snapshot สำหรับหมวดนั้น ๆ
     const data: any = {
-      mode: CapMode.AUTO,
+      mode: 'AUTO' as any,
       [fm.count]: topK,
-      [fm.threshold]: new Prisma.Decimal(threshold),
+      [fm.threshold]: threshold as any,
       [fm.effectiveAt]: new Date(),
     }
     const updated = await prisma.capRule.update({ where: { id: 1 }, data })
