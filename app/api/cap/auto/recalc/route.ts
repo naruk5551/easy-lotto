@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import type { Prisma } from '@prisma/client'
 
 const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
 type Category = (typeof CATEGORY_VALUES)[number]
@@ -57,7 +56,8 @@ export async function POST(req: NextRequest) {
     const cap = await getOrCreateCapRule()
     const topK = getTopK(cap as any, cat, KInput)
 
-    const createdAtFilter: Prisma.OrderItemWhereInput['createdAt'] = {}
+    // ใช้ type ง่าย ๆ แทน Prisma.OrderItemWhereInput['createdAt']
+    const createdAtFilter: { gte?: Date; lt?: Date } = {}
     if (from) createdAtFilter.gte = from
     if (to)   createdAtFilter.lt  = to
 
