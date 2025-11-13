@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Category } from '@prisma/client'
+
+const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
+type Category = (typeof CATEGORIES)[number]
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,13 +12,13 @@ export async function POST(req: NextRequest) {
 
     const baseUrl = new URL('/api/cap/auto/recalc', req.nextUrl.origin).toString()
 
-    const cats = [
-      Category.TOP3,
-      Category.TOD3,
-      Category.TOP2,
-      Category.BOTTOM2,
-      Category.RUN_TOP,
-      Category.RUN_BOTTOM,
+    const cats: Category[] = [
+      'TOP3',
+      'TOD3',
+      'TOP2',
+      'BOTTOM2',
+      'RUN_TOP',
+      'RUN_BOTTOM',
     ]
 
     const results = []

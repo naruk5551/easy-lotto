@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { Category, CapMode, Prisma } from '@prisma/client'
+import { CapMode, Prisma } from '@prisma/client'
+
+const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
+type Category = (typeof CATEGORY_VALUES)[number]
 
 // ระบุฟิลด์ของแต่ละหมวดสำหรับ AUTO (Top-K, threshold, effectiveAt)
-const fieldMap = {
-  [Category.TOP3]:       { count: 'autoTop3Count',      threshold: 'autoThresholdTop3',      effectiveAt: 'effectiveAtTop3' },
-  [Category.TOD3]:       { count: 'autoTod3Count',      threshold: 'autoThresholdTod3',      effectiveAt: 'effectiveAtTod3' },
-  [Category.TOP2]:       { count: 'autoTop2Count',      threshold: 'autoThresholdTop2',      effectiveAt: 'effectiveAtTop2' },
-  [Category.BOTTOM2]:    { count: 'autoBottom2Count',   threshold: 'autoThresholdBottom2',   effectiveAt: 'effectiveAtBottom2' },
-  [Category.RUN_TOP]:    { count: 'autoRunTopCount',    threshold: 'autoThresholdRunTop',    effectiveAt: 'effectiveAtRunTop' },
-  [Category.RUN_BOTTOM]: { count: 'autoRunBottomCount', threshold: 'autoThresholdRunBottom', effectiveAt: 'effectiveAtRunBottom' },
+const fieldMap: Record<Category, { count: string; threshold: string; effectiveAt: string }> = {
+  TOP3:       { count: 'autoTop3Count',      threshold: 'autoThresholdTop3',      effectiveAt: 'effectiveAtTop3' },
+  TOD3:       { count: 'autoTod3Count',      threshold: 'autoThresholdTod3',      effectiveAt: 'effectiveAtTod3' },
+  TOP2:       { count: 'autoTop2Count',      threshold: 'autoThresholdTop2',      effectiveAt: 'effectiveAtTop2' },
+  BOTTOM2:    { count: 'autoBottom2Count',   threshold: 'autoThresholdBottom2',   effectiveAt: 'effectiveAtBottom2' },
+  RUN_TOP:    { count: 'autoRunTopCount',    threshold: 'autoThresholdRunTop',    effectiveAt: 'effectiveAtRunTop' },
+  RUN_BOTTOM: { count: 'autoRunBottomCount', threshold: 'autoThresholdRunBottom', effectiveAt: 'effectiveAtRunBottom' },
 } as const
 
 function parseDate(v?: unknown): Date | undefined {
@@ -41,13 +44,13 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({} as any))
     const from = parseDate(body.from)
     const to   = parseDate(body.to)
-    const catKey = (body.category as keyof typeof Category) ?? 'TOP3'
+    const catKey = (body.category as string | undefined) ?? 'TOP3'
     const KInput = Number(body.K ?? 0)
 
-    if (!(catKey in Category)) {
+    if (!CATEGORY_VALUES.includes(catKey as Category)) {
       return NextResponse.json({ error: `invalid category: ${catKey}` }, { status: 400 })
     }
-    const cat = Category[catKey]
+    const cat = catKey as Category
     const fm = fieldMap[cat]
 
     // ✅ ใช้ singleton upsert แทน findFirst
@@ -87,10 +90,12 @@ export async function POST(req: NextRequest) {
     const toNumber = new Map(products.map(p => [p.id, p.number]))
 
     // จัดอันดับตามยอดรวม
-    const list = rows.map(r => ({
-      number: toNumber.get(r.productId)!,
-      amount: Number(r._sum.sumAmount ?? 0),
-    })).sort((a, b) => b.amount - a.amount)
+    const list = rows
+      .map(r => ({
+        number: toNumber.get(r.productId)!,
+        amount: Number(r._sum.sumAmount ?? 0),
+      }))
+      .sort((a, b) => b.amount - a.amount)
 
     const top = list.slice(0, topK)
     const threshold = top.length ? top[top.length - 1].amount : 0
