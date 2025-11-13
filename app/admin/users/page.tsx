@@ -32,7 +32,7 @@ export default async function AdminUsersPage() {
             </tr>
           </thead>
           <tbody>
-            {pending.map((u) => (
+            {pending.map((u: any) => (
               <tr key={u.id}>
                 <td className="border px-2 py-1">{u.id}</td>
                 <td className="border px-2 py-1">{u.username}</td>
