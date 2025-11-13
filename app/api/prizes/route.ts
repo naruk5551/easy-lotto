@@ -38,22 +38,22 @@ export async function GET(req: Request) {
   const tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
   if (!tw) return NextResponse.json({ error: 'ยังไม่มี Time Window' }, { status: 400 });
 
-  let p = await prisma.prizeSetting.findUnique({ where: { timeWindowId: tw.id } });
-  if (!p) {
-    p = await prisma.prizeSetting.create({
-      data: {
-        timeWindowId: tw.id,
-        top3: '000',
-        bottom2: '00',
-        payoutTop3: 600,
-        payoutTod3: 100,
-        payoutTop2: 70,
-        payoutBottom2: 70,
-        payoutRunTop: 3,
-        payoutRunBottom: 4,
-      },
-    });
-  }
+  const p = await prisma.prizeSetting.upsert({
+    where: { timeWindowId: tw.id },
+    update: {},
+    create: {
+      timeWindowId: tw.id,
+      top3: '000',
+      bottom2: '00',
+      payoutTop3: 600,
+      payoutTod3: 100,
+      payoutTop2: 70,
+      payoutBottom2: 70,
+      payoutRunTop: 3,
+      payoutRunBottom: 4,
+    },
+  });
+
   return NextResponse.json({
     id: p.id,
     timeWindowId: p.timeWindowId,
