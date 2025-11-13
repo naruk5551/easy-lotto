@@ -1,0 +1,110 @@
+.container {
+  padding: 20px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.title {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+/* ── ฟอร์มบรรทัดเดียว ───────────────────────── */
+.inlineForm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.lbl {
+  min-width: 48px;
+  font-size: 0.95rem;
+}
+
+.input {
+  min-width: 220px;
+  height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+/* ── ปุ่มตรงกลาง ───────────────────────────── */
+.centerButtons {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0 20px;
+}
+
+.btnPrimary {
+  height: 40px;
+  padding: 0 18px;
+  background-color: #0b69ff;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+}
+.btnPrimary:hover { background-color: #0956ce; }
+
+.btnHome {
+  height: 40px;
+  line-height: 40px;
+  padding: 0 18px;
+  background-color: #555;
+  color: #fff;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 1rem;
+}
+.btnHome:hover { background-color: #333; }
+
+/* ── ตาราง ───────────────────────────────────── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  border: 1px solid #e5e5e5;
+  padding: 8px;
+}
+
+.table th {
+  background-color: #f7f7f7;
+  text-align: left;
+}
+
+.actionsCell {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.btnSmall,
+.btnSmallDanger {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.btnSmall { background: #0088cc; color: #fff; }
+.btnSmall:hover { background: #0a7ab6; }
+
+.btnSmallDanger { background: #d33; color: #fff; }
+.btnSmallDanger:hover { background: #b00; }
+
+@media (max-width: 640px) {
+  .inlineForm { gap: 8px; }
+  .input { min-width: 180px; flex: 1 1 180px; }
+  .centerButtons { flex-direction: column; gap: 8px; }
+}

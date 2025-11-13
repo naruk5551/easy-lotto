@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  approved  Boolean  @default(false)
+  orders    Order[]
+
+  @@index([createdAt])
+  @@index([approved])
+  @@index([username])
+}
+
+model Order {
+  id        Int         @id @default(autoincrement())
+  userId    Int
+  createdAt DateTime    @default(now())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     OrderItem[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Product {
+  id                 Int         @id @default(autoincrement())
+  category           Category
+  number             String
+  createdAt          DateTime    @default(now())
+  capAmountTop3      Int?
+  capAmountTod3      Int?
+  capAmountTop2      Int?
+  capAmountBottom2   Int?
+  capAmountRunTop    Int?
+  capAmountRunBottom Int?
+  ExcessBuy          ExcessBuy[]
+  OrderItem          OrderItem[]
+
+  @@unique([category, number], name: "category_number")
+  @@index([category])
+  @@index([category, number])
+}
+
+model OrderItem {
+  id        Int         @id @default(autoincrement())
+  orderId   Int
+  productId Int
+  price     Decimal     @db.Decimal(12, 2)
+  quantity  Int         @default(1)
+  sumAmount Decimal     @db.Decimal(14, 2)
+  createdAt DateTime    @default(now())
+  excesses  ExcessBuy[]
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product     @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([createdAt])
+  @@index([createdAt, productId])
+}
+
+model ExcessBuy {
+  id          Int          @id @default(autoincrement())
+  orderItemId Int?
+  amount      Decimal      @db.Decimal(14, 2)
+  createdAt   DateTime     @default(now())
+  productId   Int?
+  batchId     Int?
+  batch       SettleBatch? @relation(fields: [batchId], references: [id])
+  orderItem   OrderItem?   @relation(fields: [orderItemId], references: [id])
+  product     Product?     @relation(fields: [productId], references: [id])
+
+  @@index([createdAt])
+  @@index([batchId])
+}
+
+model AcceptSelf {
+  id        Int      @id @default(autoincrement())
+  category  Category
+  number    String
+  amount    Decimal  @db.Decimal(14, 2)
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([category, number, createdAt])
+}
+
+model TimeWindow {
+  id           Int           @id @default(autoincrement())
+  startAt      DateTime
+  endAt        DateTime
+  note         String?
+  createdAt    DateTime      @default(now())
+  prizeSetting PrizeSetting?
+  settleRun    SettleRun?
+
+  @@index([startAt, endAt])
+}
+
+model SettleBatch {
+  id        Int         @id @default(autoincrement())
+  from      DateTime
+  to        DateTime
+  createdAt DateTime    @default(now())
+  items     ExcessBuy[]
+}
+
+model CapRule {
+  id                     Int       @id @default(autoincrement())
+  mode                   CapMode   @default(MANUAL)
+  top3                   Int?
+  tod3                   Int?
+  top2                   Int?
+  bottom2                Int?
+  runTop                 Int?
+  runBottom              Int?
+  createdAt              DateTime  @default(now())
+  convertTod3ToTop3      Boolean   @default(false)
+  autoTop3               Int?
+  autoTod3               Int?
+  autoTop2               Int?
+  autoBottom2            Int?
+  autoRunTop             Int?
+  autoRunBottom          Int?
+  autoRecalcSeconds      Int?
+  autoThresholdTop3      Decimal?  @db.Decimal(14, 2)
+  autoTop3Count          Int?
+  autoBottom2Count       Int?
+  autoRunBottomCount     Int?
+  autoRunTopCount        Int?
+  autoThresholdBottom2   Decimal?  @db.Decimal(14, 2)
+  autoThresholdRunBottom Decimal?  @db.Decimal(14, 2)
+  autoThresholdRunTop    Decimal?  @db.Decimal(14, 2)
+  autoThresholdTod3      Decimal?  @db.Decimal(14, 2)
+  autoThresholdTop2      Decimal?  @db.Decimal(14, 2)
+  autoTod3Count          Int?
+  autoTop2Count          Int?
+  effectiveAtBottom2     DateTime?
+  effectiveAtRunBottom   DateTime?
+  effectiveAtRunTop      DateTime?
+  effectiveAtTod3        DateTime?
+  effectiveAtTop2        DateTime?
+  effectiveAtTop3        DateTime?
+
+  @@map("CapRule")
+}
+
+model SettleRun {
+  id                Int        @id @default(autoincrement())
+  timeWindowId      Int        @unique
+  capMode           CapMode
+  capTop3           Int?
+  capTod3           Int?
+  capTop2           Int?
+  capBottom2        Int?
+  capRunTop         Int?
+  capRunBottom      Int?
+  autoTop3          Int?
+  autoTod3          Int?
+  autoTop2          Int?
+  autoBottom2       Int?
+  autoRunTop        Int?
+  autoRunBottom     Int?
+  totalAmount       Decimal    @db.Decimal(14, 2)
+  totalSendToDealer Decimal    @db.Decimal(14, 2)
+  totalKeepAmount   Decimal    @db.Decimal(14, 2)
+  createdAt         DateTime   @default(now())
+  timeWindow        TimeWindow @relation(fields: [timeWindowId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+}
+
+/// === PRIZES ===
+/// ตั้งค่ารางวัล/อัตราจ่ายต่อ "งวด" (อิง timeWindow)
+model PrizeSetting {
+  id              Int        @id @default(autoincrement())
+  timeWindowId    Int        @unique
+  top3            String     @db.VarChar(3)
+  bottom2         String     @db.VarChar(2)
+  payoutTop3      Int        @default(600)
+  payoutTod3      Int        @default(100)
+  payoutTop2      Int        @default(70)
+  payoutBottom2   Int        @default(70)
+  payoutRunTop    Int        @default(3)
+  payoutRunBottom Int        @default(4)
+  createdAt       DateTime   @default(now())
+  timeWindow      TimeWindow @relation(fields: [timeWindowId], references: [id], onDelete: Cascade)
+
+  @@map("PrizeSetting")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Category {
+  TOP3
+  TOD3
+  TOP2
+  BOTTOM2
+  RUN_TOP
+  RUN_BOTTOM
+}
+
+enum CapMode {
+  MANUAL
+  AUTO
+}

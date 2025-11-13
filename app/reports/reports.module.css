@@ -1,0 +1,14 @@
+.container{max-width:1100px;margin:0 auto;padding:16px}
+.topbar{display:flex;align-items:center;margin-bottom:8px}
+.btn{background:#0d6efd;color:#fff;border:0;border-radius:8px;padding:8px 12px;text-decoration:none}
+.grow{flex:1}
+.title{font-weight:700;margin:8px 0 12px}
+.filters .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.table{width:100%;border-collapse:collapse;border:1px solid #000}
+.table th,.table td{border:1px solid #000;padding:8px}
+.right{text-align:right}
+.actions button{margin-right:6px}
+.actions .danger{color:#b00000}
+.muted{text-align:center;opacity:.6}
+.bannerErr{padding:8px;margin:8px 0;border:1px solid #ffb3b3;background:#ffecec;color:#b00000;border-radius:6px}
+.pagination{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px}
