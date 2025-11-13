@@ -33,6 +33,35 @@ function catTH(cat: PrismaCategory) {
   }
 }
 
+/** อ่าน cookie แบบปลอดภัย (เหมือนที่ใช้ใน /api/reports) */
+function readCookieValue(req: Request, name: string): string | null {
+  const raw = req.headers.get('cookie');
+  if (!raw) return null;
+  const parts = raw.split(/;\s*/);
+  for (const p of parts) {
+    const i = p.indexOf('=');
+    if (i === -1) continue;
+    const k = decodeURIComponent(p.slice(0, i).trim());
+    if (k === name) return decodeURIComponent(p.slice(i + 1));
+  }
+  return null;
+}
+
+/** หา user ปัจจุบันจาก header x-user-id หรือ cookie x-user-id */
+function getMeId(req: Request): number | null {
+  const h = req.headers.get('x-user-id');
+  if (h) {
+    const n = Number(h);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const c = readCookieValue(req, 'x-user-id');
+  if (c) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 /** retry เฉพาะ P2024: pool timeout */
 async function withPrismaRetry<T>(
   fn: () => Promise<T>,
@@ -63,15 +92,18 @@ export async function POST(req: Request) {
 
     // 2) รับค่าจาก client
     const body = await req.json();
-    const { category, items, userId } = body as {
+    const { category, items } = body as {
       category: string;
       items: Array<{ number: string; priceMain?: number; priceTod?: number }>;
-      userId?: number;
+      // userId?: number;  // 👈 ไม่ใช้แล้ว อ่านจาก cookie/header แทน
     };
 
-    if (!userId || !Number.isInteger(userId) || userId <= 0) {
-      return new NextResponse('ต้องระบุ userId (จำนวนเต็ม > 0)', { status: 400 });
+    // ใช้ userId จาก header / cookie แทนค่าที่ client ส่งมา
+    const userId = getMeId(req);
+    if (!userId) {
+      return new NextResponse('ไม่พบ user ที่ล็อกอิน (missing x-user-id)', { status: 401 });
     }
+
     if (!category) return new NextResponse('กรุณาระบุหมวด', { status: 400 });
     if (!Array.isArray(items) || items.length === 0) {
       return new NextResponse('ไม่มีรายการ', { status: 400 });
@@ -92,7 +124,6 @@ export async function POST(req: Request) {
         throw new Error(`แถวที่ ${idx + 1}: ไม่ได้กรอกเลข`);
       }
       if (number.length !== expectLen) {
-        // ชี้แนะหมวดที่ถูกต้องด้วย
         const hint =
           number.length === 3 ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”' :
           number.length === 2 ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”' :
@@ -143,7 +174,7 @@ export async function POST(req: Request) {
       prisma.order.create({
         data: {
           createdAt: new Date(), // UTC
-          user: { connect: { id: userId } },
+          user: { connect: { id: userId } },   // 👈 ใช้ userId จาก cookie/header
           items: {
             create: normalized.map((it) => {
               const productId = idMap.get(it.number);

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/auth';
-import { CapRuleSchema } from '@/lib/validators';
+import { OrderPayloadSchema as CapRuleSchema } from '@/lib/validators';
 
 export async function GET() {
   const session = await getSession();
