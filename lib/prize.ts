@@ -1,9 +1,6 @@
 // /lib/prize.ts
-//import { Category } from '@prisma/client';
+import { Category } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-
-const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
-type Category = (typeof CATEGORY_VALUES)[number];
 
 export type PrizeSetting = {
   top3: string;
