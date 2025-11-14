@@ -100,7 +100,10 @@ export async function GET(req: Request) {
     const sendPerProd = new Map<number, number>();
     for (const g of sendGroups) sendPerProd.set(g.productId!, Number(g._sum.amount || 0));
 
-    const sendProdIds = uniq(sendGroups.map((g: any) => g.productId).filter((x): x is number => !!x));
+    const sendProdIds = uniq(
+      sendGroups
+      .map((g: any) => g.productId as number | null)
+      .filter((x: number | null): x is number => typeof x === 'number'));
 
     // รวม product ที่ปรากฏทั้ง inflow หรือ send
     const allProdIds = uniq([...inflowProdIds, ...sendProdIds]);
