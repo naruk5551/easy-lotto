@@ -3,10 +3,10 @@ export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-const CATS = ['TOP3','TOD3','TOP2','BOTTOM2','RUN_TOP','RUN_BOTTOM'] as const;
+const CATS = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
 type Cat = (typeof CATS)[number];
 
-function parseISO(s?: string|null): Date|undefined {
+function parseISO(s?: string | null): Date | undefined {
   if (!s) return undefined;
   const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
@@ -23,23 +23,23 @@ function buildWinningSets(ps: { top3: string; bottom2: string; }) {
   const tod3Set = new Set<string>();
   if (t3.length === 3) {
     const digits = t3.split('');
-    const used = [false,false,false];
+    const used = [false, false, false];
     const cur: string[] = [];
     const perms = new Set<string>();
     function dfs() {
       if (cur.length === 3) { perms.add(cur.join('')); return; }
-      for (let i=0;i<3;i++){
+      for (let i = 0; i < 3; i++) {
         if (used[i]) continue;
-        used[i]=true; cur.push(digits[i]); dfs(); cur.pop(); used[i]=false;
+        used[i] = true; cur.push(digits[i]); dfs(); cur.pop(); used[i] = false;
       }
     }
-    dfs(); perms.forEach(x=>tod3Set.add(x));
+    dfs(); perms.forEach(x => tod3Set.add(x));
   }
 
-  const top2Set = new Set<string>(t3.length===3 ? [t3.slice(1)] : []);
+  const top2Set = new Set<string>(t3.length === 3 ? [t3.slice(1)] : []);
   const bottom2Set = new Set<string>(b2 ? [b2] : []);
-  const runTopSet   = new Set<string>(t3.length===3 ? t3.split('') : []);
-  const runBottomSet= new Set<string>(b2.length===2 ? b2.split('') : []);
+  const runTopSet = new Set<string>(t3.length === 3 ? t3.split('') : []);
+  const runBottomSet = new Set<string>(b2.length === 2 ? b2.split('') : []);
 
   return {
     TOP3: top3Set,
@@ -55,7 +55,7 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     let fromISO = url.searchParams.get('from');
-    let toISO   = url.searchParams.get('to');
+    let toISO = url.searchParams.get('to');
 
     // ถ้าไม่ส่ง from/to มา ให้ใช้งวดล่าสุด
     if (!fromISO || !toISO) {
@@ -69,11 +69,11 @@ export async function GET(req: Request) {
         });
       }
       fromISO = latest.startAt.toISOString();
-      toISO   = latest.endAt.toISOString();
+      toISO = latest.endAt.toISOString();
     }
 
     const from = parseISO(fromISO)!;
-    const to   = parseISO(toISO)!;
+    const to = parseISO(toISO)!;
 
     // ===== 1) INFLOW จาก OrderItem.sumAmount -> ต่อ productId และรวมต่อหมวด
     const inflowGroups = await prisma.orderItem.groupBy({
@@ -84,7 +84,10 @@ export async function GET(req: Request) {
     const inflowPerProd = new Map<number, number>();
     for (const g of inflowGroups) inflowPerProd.set(g.productId!, Number(g._sum.sumAmount || 0));
 
-    const inflowProdIds = uniq(inflowGroups.map((g:any) => g.productId).filter((x): x is number => !!x));
+    const inflowProdIds = uniq(
+      inflowGroups.map((g: any) => g.productId as number | null).filter((x): x is number => x != null)
+    );
+
 
     // ===== 2) SEND จาก ExcessBuy.amount -> ต่อ productId และรวมต่อหมวด
     const sendGroups = await prisma.excessBuy.groupBy({
@@ -95,37 +98,37 @@ export async function GET(req: Request) {
     const sendPerProd = new Map<number, number>();
     for (const g of sendGroups) sendPerProd.set(g.productId!, Number(g._sum.amount || 0));
 
-    const sendProdIds = uniq(sendGroups.map((g:any) => g.productId).filter((x): x is number => !!x));
+    const sendProdIds = uniq(sendGroups.map((g: any) => g.productId).filter((x): x is number => !!x));
 
     // รวม product ที่ปรากฏทั้ง inflow หรือ send
     const allProdIds = uniq([...inflowProdIds, ...sendProdIds]);
     const prods = allProdIds.length
       ? await prisma.product.findMany({
-          where: { id: { in: allProdIds } },
-          select: { id: true, category: true, number: true }
-        })
+        where: { id: { in: allProdIds } },
+        select: { id: true, category: true, number: true }
+      })
       : [];
 
-    const prodInfo = new Map<number, {cat: Cat; number: string}>();
+    const prodInfo = new Map<number, { cat: Cat; number: string }>();
     prods.forEach(p => prodInfo.set(p.id, { cat: p.category as Cat, number: p.number }));
 
     // รวมยอดอินพุตแบบหมวดเพื่อทำ summary
     const inflowByCat = new Map<Cat, number>();
-    const sendByCat   = new Map<Cat, number>();
+    const sendByCat = new Map<Cat, number>();
     for (const id of allProdIds) {
       const info = prodInfo.get(id);
       if (!info) continue;
       const inflow = inflowPerProd.get(id) || 0;
-      const send   = sendPerProd.get(id) || 0;
+      const send = sendPerProd.get(id) || 0;
       inflowByCat.set(info.cat, (inflowByCat.get(info.cat) || 0) + inflow);
-      sendByCat.set(info.cat,   (sendByCat.get(info.cat)   || 0) + send);
+      sendByCat.set(info.cat, (sendByCat.get(info.cat) || 0) + send);
     }
 
     // ===== 2.5) KEEP = inflow - send (ไม่ติดลบ) (ให้ตรงหน้า keep)
     const keepByCat = new Map<Cat, number>();
     for (const cat of CATS) {
       const inflow = inflowByCat.get(cat) || 0;
-      const send   = sendByCat.get(cat) || 0;
+      const send = sendByCat.get(cat) || 0;
       keepByCat.set(cat, Math.max(0, inflow - send));
     }
 
@@ -133,8 +136,8 @@ export async function GET(req: Request) {
     const ps = await prisma.prizeSetting.findFirst({
       where: { timeWindow: { startAt: from, endAt: to } },
       select: {
-        payoutTop3:true, payoutTod3:true, payoutTop2:true, payoutBottom2:true,
-        payoutRunTop:true, payoutRunBottom:true, top3:true, bottom2:true
+        payoutTop3: true, payoutTod3: true, payoutTop2: true, payoutBottom2: true,
+        payoutRunTop: true, payoutRunBottom: true, top3: true, bottom2: true
       }
     });
 
@@ -196,8 +199,8 @@ export async function GET(req: Request) {
       const inflow = inflowByCat.get(cat) || 0;
       const keepAmt = keepByCat.get(cat) || 0;
       const sendAmt = sendByCat.get(cat) || 0;
-      const pSelf   = prizeSelfByCat.get(cat) || 0;
-      const pDeal   = prizeDealerByCat.get(cat) || 0;
+      const pSelf = prizeSelfByCat.get(cat) || 0;
+      const pDeal = prizeDealerByCat.get(cat) || 0;
 
       if (inflow === 0 && keepAmt === 0 && sendAmt === 0 && pSelf === 0 && pDeal === 0) continue;
 
