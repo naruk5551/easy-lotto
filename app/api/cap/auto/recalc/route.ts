@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
       where: { id: { in: productIds } },
       select: { id: true, number: true },
     })
-    const toNumber = new Map(products.map(p => [p.id, p.number]))
+    const toNumber = new Map(products.map((p: any) => [p.id, p.number]))
 
     // จัดอันดับตามยอดรวม
     const list = rows
