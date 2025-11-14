@@ -178,9 +178,9 @@ export async function GET(req: Request) {
 
       // --- รางวัล "เจ้ามือ" : ใช้ยอดส่งเจ้ามือต่อเลข
       for (const id of sendProdIds) {
-        const info = prodInfo.get(id);
+        const info = prodInfo.get(id as number);
         if (!info) continue;
-        const amt = sendPerProd.get(id) || 0;
+        const amt = sendPerProd.get(id as number) || 0;
         if (amt <= 0) continue;
         if (win[info.cat].has(info.number)) {
           const value = amt * (payout[info.cat] || 0);
