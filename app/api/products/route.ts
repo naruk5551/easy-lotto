@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { Category } from '@prisma/client';
+//import { Category } from '@prisma/client';
+
+const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
+type Category = (typeof CATEGORIES)[number]
 
 // ลำดับหมวด (เรียงแบบกำหนดเอง)
 const CATEGORY_ORDER: Category[] = [
