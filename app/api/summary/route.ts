@@ -115,7 +115,7 @@ export async function GET(req: Request) {
       : [];
 
     const prodInfo = new Map<number, { cat: Cat; number: string }>();
-    prods.forEach(p => prodInfo.set(p.id, { cat: p.category as Cat, number: p.number }));
+    prods.forEach((p:any) => prodInfo.set(p.id, { cat: p.category as Cat, number: p.number }));
 
     // รวมยอดอินพุตแบบหมวดเพื่อทำ summary
     const inflowByCat = new Map<Cat, number>();
