@@ -87,7 +87,7 @@ export async function GET(req: Request) {
     const inflowProdIds = uniq(
       inflowGroups
         .map((g: any) => g.productId as number | null)
-        .filter((x): x is number => typeof x === 'number')
+        .filter((x: number | null): x is number => typeof x === 'number')
     );
 
 
