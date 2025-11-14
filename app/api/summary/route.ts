@@ -167,7 +167,7 @@ export async function GET(req: Request) {
       for (const id of allProdIds) {
         const info = prodInfo.get(id as number);
         if (!info) continue;
-        const kept = Math.max(0, (inflowPerProd.get(id) || 0) - (sendPerProd.get(id) || 0));
+        const kept = Math.max(0, (inflowPerProd.get(id as number) || 0) - (sendPerProd.get(id) || 0));
         if (kept <= 0) continue;
         if (win[info.cat].has(info.number)) {
           const value = kept * (payout[info.cat] || 0);
