@@ -3,7 +3,23 @@ export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { Category, CapMode, Prisma } from '@prisma/client';
+
+// ------------------ แทน enum / Prisma ที่หายไป ------------------
+
+// Category เดิมของ Prisma
+const CATEGORY_VALUES = [
+  'TOP3',
+  'TOD3',
+  'TOP2',
+  'BOTTOM2',
+  'RUN_TOP',
+  'RUN_BOTTOM',
+] as const;
+
+type Category = (typeof CATEGORY_VALUES)[number];
+
+// CapMode เดิมของ Prisma
+type CapMode = 'AUTO' | 'MANUAL';
 
 // ---------- helpers ----------
 function parseDateUTC(v?: unknown): Date | undefined {
@@ -22,10 +38,10 @@ function parseDateUTC(v?: unknown): Date | undefined {
 
 type CapRow = {
   mode: CapMode;
-  top3: number|null; tod3: number|null; top2: number|null;
-  bottom2: number|null; runTop: number|null; runBottom: number|null;
-  autoThresholdTop3: any|null; autoThresholdTod3: any|null; autoThresholdTop2: any|null;
-  autoThresholdBottom2: any|null; autoThresholdRunTop: any|null; autoThresholdRunBottom: any|null;
+  top3: number | null; tod3: number | null; top2: number | null;
+  bottom2: number | null; runTop: number | null; runBottom: number | null;
+  autoThresholdTop3: any | null; autoThresholdTod3: any | null; autoThresholdTop2: any | null;
+  autoThresholdBottom2: any | null; autoThresholdRunTop: any | null; autoThresholdRunBottom: any | null;
   convertTod3ToTop3: boolean;
 };
 
@@ -41,7 +57,7 @@ function capFor(cat: Category, cap: CapRow): number {
       case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
     }
   } else {
-    const n = (v: number|null) => Number(v ?? 0);
+    const n = (v: number | null) => Number(v ?? 0);
     switch (cat) {
       case 'TOP3':       return n(cap.top3);
       case 'TOD3':       return n(cap.tod3);
@@ -136,7 +152,7 @@ export async function POST(req: NextRequest) {
     // 3) รวมยอดซื้อ (cumulative) ตั้งแต่ต้นงวด.._to
     const inflowsRaw = await prisma.$queryRaw<
       { productId: number; category: Category; number: string; inflow: number }[]
-    >(Prisma.sql`
+    >`
       SELECT p.id        AS "productId"
            , p.category  AS "category"
            , p.number    AS "number"
@@ -146,7 +162,7 @@ export async function POST(req: NextRequest) {
       JOIN "Product" p ON oi."productId" = p.id
       WHERE o."createdAt" >= ${startAt} AND o."createdAt" < ${_to}
       GROUP BY p.id, p.category, p.number
-    `);
+    `;
 
     // 4) รวม TOD3 → TOP3 ก่อนคำนวณอั้น
     type Key = string; // `${cat}|${number}`
@@ -190,14 +206,14 @@ export async function POST(req: NextRequest) {
     }
 
     // 5) อ่าน “ยอดที่เคยส่งแล้ว” ตั้งแต่ต้นงวด.._to
-    const sentRaw = await prisma.$queryRaw<{ productId: number; sent: number }[]>(Prisma.sql`
+    const sentRaw = await prisma.$queryRaw<{ productId: number; sent: number }[]>`
       SELECT ex."productId" AS "productId",
              COALESCE(SUM(ex.amount),0)::float AS "sent"
       FROM "ExcessBuy" ex
       JOIN "SettleBatch" b ON ex."batchId" = b."id"
       WHERE b."from" >= ${startAt} AND b."to" <= ${_to}
       GROUP BY ex."productId"
-    `);
+    `;
     const sentByProductId = new Map<number, number>();
     for (const r of sentRaw) sentByProductId.set(r.productId, r.sent);
 

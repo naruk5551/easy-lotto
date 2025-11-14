@@ -4,11 +4,23 @@ export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getLatestTimeWindow, isNowInWindow } from '@/lib/timeWindow';
-import { Category as PrismaCategory } from '@prisma/client';
+
+// แทนที่ Category enum จาก @prisma/client ด้วย local type เอง
+const PRISMA_CATEGORY_VALUES = [
+  'TOP3',
+  'TOD3',
+  'TOP2',
+  'BOTTOM2',
+  'RUN_TOP',
+  'RUN_BOTTOM',
+] as const;
+
+type PrismaCategory = (typeof PRISMA_CATEGORY_VALUES)[number];
 
 function toPrismaCategory(input: string): PrismaCategory {
-  const values = Object.values(PrismaCategory) as string[];
-  if (!values.includes(input)) throw new Error(`หมวดไม่ถูกต้อง: ${input}`);
+  if (!PRISMA_CATEGORY_VALUES.includes(input as PrismaCategory)) {
+    throw new Error(`หมวดไม่ถูกต้อง: ${input}`);
+  }
   return input as PrismaCategory;
 }
 
