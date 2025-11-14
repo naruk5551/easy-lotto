@@ -165,7 +165,7 @@ export async function GET(req: Request) {
 
       // --- รางวัล "รับเอง" : ใช้ยอด keep ต่อเลข = max( inflowPerProd - sendPerProd, 0 )
       for (const id of allProdIds) {
-        const info = prodInfo.get(id);
+        const info = prodInfo.get(id as number);
         if (!info) continue;
         const kept = Math.max(0, (inflowPerProd.get(id) || 0) - (sendPerProd.get(id) || 0));
         if (kept <= 0) continue;
