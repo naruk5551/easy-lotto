@@ -121,10 +121,10 @@ export async function GET(req: Request) {
     const inflowByCat = new Map<Cat, number>();
     const sendByCat = new Map<Cat, number>();
     for (const id of allProdIds) {
-      const info = prodInfo.get(id);
+      const info = prodInfo.get(id as number);
       if (!info) continue;
-      const inflow = inflowPerProd.get(id) || 0;
-      const send = sendPerProd.get(id) || 0;
+      const inflow = inflowPerProd.get(id as number) || 0;
+      const send = sendPerProd.get(id as number) || 0;
       inflowByCat.set(info.cat, (inflowByCat.get(info.cat) || 0) + inflow);
       sendByCat.set(info.cat, (sendByCat.get(info.cat) || 0) + send);
     }
