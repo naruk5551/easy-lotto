@@ -3,7 +3,10 @@ export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { Category, CapMode } from '@prisma/client';
+import { CapMode, Prisma } from '@prisma/client'
+
+const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
+type Category = (typeof CATEGORY_VALUES)[number]
 
 function parseDateUTC(v?: unknown): Date | undefined {
   if (v == null) return undefined;
