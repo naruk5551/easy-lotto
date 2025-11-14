@@ -131,7 +131,10 @@ export async function POST(req: Request) {
       BOTTOM2: new Map(), RUN_TOP: new Map(), RUN_BOTTOM: new Map()
     };
     const prodMeta = new Map<number, { cat: Cat, number: string }>();
-    prods.forEach(p => prodMeta.set(p.id, { cat: p.category as Cat, number: p.number }));
+    prods.forEach((p: { id: number; category: Cat; number: string }) =>
+      prodMeta.set(p.id, { cat: p.category as Cat, number: p.number })
+    );
+
 
     for (const row of g) {
       const meta = row.productId ? prodMeta.get(row.productId) : undefined;
