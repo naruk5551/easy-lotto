@@ -119,8 +119,7 @@ export async function POST(req: Request) {
     });
     const ids = g
       .map((g: { productId: number | null }) => g.productId)
-      .filter((x): x is number => !!x);
-
+      .filter((x: number | null): x is number => !!x);
     const prods = ids.length ? await prisma.product.findMany({
       where: { id: { in: ids } },
       select: { id: true, category: true, number: true }
