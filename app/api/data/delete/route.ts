@@ -3,7 +3,6 @@ export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import type { Prisma } from '@prisma/client';
 
 /**
  * ลบข้อมูล “ทั้งงวด” ตาม timeWindowId ที่รับมา
@@ -49,7 +48,7 @@ export async function POST(req: Request) {
       affectedBatchIds: [] as number[],
     };
 
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await prisma.$transaction(async (tx: any) => {
       // ----- 1) ลบ Order (+Items via Cascade) ภายในช่วงงวด -----
       const ordersInRange = await tx.order.findMany({
         where: { createdAt: { gte: startAt, lt: endAt } },
@@ -71,7 +70,7 @@ export async function POST(req: Request) {
         select: { id: true },
       });
 
-      const batchIds = batches.map((b) => b.id);
+      const batchIds = batches.map((b: { id: number }) => b.id);
       result.affectedBatchIds = batchIds;
 
       if (batchIds.length > 0) {
