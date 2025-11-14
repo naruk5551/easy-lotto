@@ -13,7 +13,8 @@
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.18.0",
+    "@prisma/client": "^6.19.0",
+    "prisma": "6.19.0",
     "@resvg/resvg-js": "^2.6.2",
     "@resvg/resvg-js-win32-x64-msvc": "^2.6.2",
     "@supabase/supabase-js": "^2.78.0",
