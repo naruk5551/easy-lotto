@@ -134,7 +134,7 @@ export async function GET(req: Request) {
 
     // ติดธง locked ต่อแถว (ไม่เปลี่ยน logic อื่น)
     const items = await Promise.all(
-      rows.map(async (r) => {
+      rows.map(async (r:any) => {
         const locked = await isItemLocked(r.createdAt);
         return {
           id: r.id,
