@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     }
 
     // map productId -> number
-    const productIds = rows.map(r => r.productId)
+    const productIds = rows.map((r: any) => r.productId)
     const products = await prisma.product.findMany({
       where: { id: { in: productIds } },
       select: { id: true, number: true },
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
 
     // จัดอันดับตามยอดรวม
     const list = rows
-      .map(r => ({
+      .map((r: any) => ({
         number: toNumber.get(r.productId)!,
         amount: Number(r._sum.sumAmount ?? 0),
       }))
