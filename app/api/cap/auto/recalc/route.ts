@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
         number: toNumber.get(r.productId)!,
         amount: Number(r._sum.sumAmount ?? 0),
       }))
-      .sort((a, b) => b.amount - a.amount)
+      .sort((a: any, b: any) => b.amount - a.amount)
 
     const top = list.slice(0, topK)
     const threshold = top.length ? top[top.length - 1].amount : 0
