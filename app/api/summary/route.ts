@@ -85,7 +85,9 @@ export async function GET(req: Request) {
     for (const g of inflowGroups) inflowPerProd.set(g.productId!, Number(g._sum.sumAmount || 0));
 
     const inflowProdIds = uniq(
-      inflowGroups.map((g: any) => g.productId as number | null).filter((x): x is number => x != null)
+      inflowGroups
+        .map((g: any) => g.productId as number | null)
+        .filter((x): x is number => typeof x === 'number')
     );
 
 
