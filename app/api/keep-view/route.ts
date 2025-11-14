@@ -2,7 +2,7 @@ export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { Category } from '@prisma/client';
+//import { Category } from '@prisma/client';
 
 function parseDateUTC(v?: string | null): Date | undefined {
   if (!v) return undefined;
@@ -29,9 +29,11 @@ export async function GET(req: NextRequest) {
   if (!tw) return NextResponse.json({ from: null, to: null, total: 0, items: [], page, pageSize });
 
   const fromQ = parseDateUTC(searchParams.get('from'));
-  const toQ   = parseDateUTC(searchParams.get('to'));
-  const from  = fromQ ?? tw.startAt;
-  const to    = toQ ?? tw.endAt;
+  const toQ = parseDateUTC(searchParams.get('to'));
+  const from = fromQ ?? tw.startAt;
+  const to = toQ ?? tw.endAt;
+  const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
+  type Category = (typeof CATEGORIES)[number]
 
   const rows = await prisma.$queryRaw<
     { category: Category; number: string; inflow: number; keep: number }[]
@@ -63,7 +65,7 @@ export async function GET(req: NextRequest) {
 
   const total = rows.length;
   const start = (page - 1) * pageSize;
-  const end   = start + pageSize;
+  const end = start + pageSize;
   const items = rows.slice(start, end);
 
   return NextResponse.json({ from, to, total, items, page, pageSize });
