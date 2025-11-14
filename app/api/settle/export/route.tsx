@@ -130,7 +130,7 @@ export async function GET(req: Request) {
       title: `ยอดส่งเจ้ามือ — Window #${windowId}`,
       page: i + 1,
       totalPages: pages.length,
-      rows: pages[i],
+      rows: pages[i] as any,
     })
     zip.file(`settle-${(i + 1).toString().padStart(2, '0')}.png`, png)
   }
