@@ -41,7 +41,7 @@ export async function GET(req: Request) {
     const paged = sorted.slice(skip, skip + pageSize);
 
     return NextResponse.json({
-      items: paged.map(i => ({
+      items: paged.map((i: any) => ({
         ...i,
         createdAt: i.createdAt.toISOString(),
       })),
