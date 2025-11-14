@@ -252,7 +252,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const already = (sentByProductId.get(productId) as number | undefined) ?? 0;
+      const already = sentByProductId.get(productId as number) ?? 0;
       const needRaw = demandTotal - already;
       // ⬇⬇⬇ ปัดเศษยอด export ให้เป็นบาทเต็มก่อนสร้าง ExcessBuy
       const need = Math.round(needRaw);
