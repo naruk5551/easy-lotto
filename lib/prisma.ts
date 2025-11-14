@@ -1,14 +1,14 @@
 // lib/prisma.ts
-import { PrismaClient as PrismaClientType } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 declare global {
   // eslint-disable-next-line no-var
-  var prisma: PrismaClientType | undefined;
+  var prisma: PrismaClient | undefined;
 }
 
-export const prisma: PrismaClientType =
+export const prisma: PrismaClient =
   global.prisma ??
-  new PrismaClientType({
+  new PrismaClient({
     log: ['warn', 'error'],
   });
 
