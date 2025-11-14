@@ -256,7 +256,7 @@ export async function POST(req: NextRequest) {
       const needRaw = demandTotal - already;
       // ⬇⬇⬇ ปัดเศษยอด export ให้เป็นบาทเต็มก่อนสร้าง ExcessBuy
       const need = Math.round(needRaw);
-      if (need > 0) toCreate.push({ productId, amount: need });
+      if (need > 0) toCreate.push({ productId: productId as number, amount: need });
     }
 
     // 7) บันทึกเป็น batch ใหม่
