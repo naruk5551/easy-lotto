@@ -1,15 +1,14 @@
 // lib/db.ts
+
+// ใช้ prisma ตัวกลางจาก lib/prisma
 import { prisma as prismaClient } from './prisma';
 
 declare global {
   // eslint-disable-next-line no-var
-  var prisma: PrismaClient | undefined;
+  var prisma: typeof prismaClient | undefined;
 }
 
-export const prisma =
-  global.prisma ??
-  new PrismaClient({
-    log: ['warn', 'error'],
-  });
+// export prisma ให้ไฟล์อื่นใช้งาน
+export const prisma = prismaClient;
 
-if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
+export default prismaClient;
