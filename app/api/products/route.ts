@@ -31,7 +31,7 @@ export async function GET(req: Request) {
     });
 
     // ✅ เรียงตามหมวดก่อน แล้วตาม id จากน้อยไปมาก
-    const sorted = itemsAll.sort((a, b) => {
+    const sorted = itemsAll.sort((a: any, b: any) => {
       const catOrderA = CATEGORY_ORDER.indexOf(a.category);
       const catOrderB = CATEGORY_ORDER.indexOf(b.category);
       if (catOrderA !== catOrderB) return catOrderA - catOrderB;
