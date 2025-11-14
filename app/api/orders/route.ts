@@ -4,23 +4,11 @@ export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getLatestTimeWindow, isNowInWindow } from '@/lib/timeWindow';
-
-// แทนที่ Category enum จาก @prisma/client ด้วย local type เอง
-const PRISMA_CATEGORY_VALUES = [
-  'TOP3',
-  'TOD3',
-  'TOP2',
-  'BOTTOM2',
-  'RUN_TOP',
-  'RUN_BOTTOM',
-] as const;
-
-type PrismaCategory = (typeof PRISMA_CATEGORY_VALUES)[number];
+import { Category as PrismaCategory } from '@prisma/client';
 
 function toPrismaCategory(input: string): PrismaCategory {
-  if (!PRISMA_CATEGORY_VALUES.includes(input as PrismaCategory)) {
-    throw new Error(`หมวดไม่ถูกต้อง: ${input}`);
-  }
+  const values = Object.values(PrismaCategory) as string[];
+  if (!values.includes(input)) throw new Error(`หมวดไม่ถูกต้อง: ${input}`);
   return input as PrismaCategory;
 }
 
@@ -154,7 +142,7 @@ export async function POST(req: Request) {
     // 4) เตรียม/สร้าง Product ตามหมวดหมู่ที่ถูกต้อง
     const numbers = Array.from(new Set(normalized.map((x) => x.number)));
 
-    const existing = await withPrismaRetry(() =>
+    const existing: { id: number; number: string }[] = await withPrismaRetry(() =>
       prisma.product.findMany({
         where: { category: prismaCategory, number: { in: numbers } },
         select: { id: true, number: true },
@@ -173,7 +161,7 @@ export async function POST(req: Request) {
     }
 
     // ดึง id อีกรอบให้ครบ
-    const all = await withPrismaRetry(() =>
+    const all: { id: number; number: string }[] = await withPrismaRetry(() =>
       prisma.product.findMany({
         where: { category: prismaCategory, number: { in: numbers } },
         select: { id: true, number: true },
