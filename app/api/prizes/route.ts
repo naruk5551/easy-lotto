@@ -21,7 +21,7 @@ export async function GET(req: Request) {
       orderBy: { id: 'desc' },
       include: { timeWindow: true },
     });
-    const items = rows.map(r => ({
+    const items = rows.map((r: any) => ({
       id: r.id,
       timeWindowId: r.timeWindowId,
       windowStartTH: fmtTH(r.timeWindow.startAt),
