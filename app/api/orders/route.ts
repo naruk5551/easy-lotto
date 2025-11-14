@@ -180,7 +180,7 @@ export async function POST(req: Request) {
     const idMap = new Map(all.map((p) => [p.number, p.id]));
 
     // 5) บันทึก Order + Items
-    const order = await withPrismaRetry(() =>
+    const order: { id: number } = await withPrismaRetry(() =>
       prisma.order.create({
         data: {
           createdAt: new Date(), // UTC
@@ -202,6 +202,7 @@ export async function POST(req: Request) {
     );
 
     return NextResponse.json({ ok: true, orderId: order.id });
+
   } catch (e: any) {
     console.error('❌ /api/orders error:', e);
     const msg = typeof e?.message === 'string' && e.message ? e.message : 'เกิดข้อผิดพลาดระหว่างบันทึก';
