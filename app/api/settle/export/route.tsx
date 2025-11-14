@@ -72,7 +72,7 @@ async function renderPagePNG({
       </div>
 
       <div style={{ borderTop: '1px solid #ddd', borderBottom: '1px solid #ddd' }}>
-        {rows.map((r, i) => (
+        {rows.map((r:any, i:any) => (
           <Row key={i} left={r.left} right={r.right} />
         ))}
       </div>
@@ -117,7 +117,7 @@ export async function GET(req: Request) {
   `
 
   // จัดข้อความแถวซ้าย/ขวา
-  const list = rows.map((r) => ({
+  const list = rows.map((r:any) => ({
     left: `${r.number} (${r.category})`,
     right: Number(r.amount).toLocaleString(),
   }))

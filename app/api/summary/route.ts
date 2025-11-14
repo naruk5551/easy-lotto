@@ -84,7 +84,7 @@ export async function GET(req: Request) {
     const inflowPerProd = new Map<number, number>();
     for (const g of inflowGroups) inflowPerProd.set(g.productId!, Number(g._sum.sumAmount || 0));
 
-    const inflowProdIds = uniq(inflowGroups.map(g => g.productId).filter((x): x is number => !!x));
+    const inflowProdIds = uniq(inflowGroups.map((g:any) => g.productId).filter((x): x is number => !!x));
 
     // ===== 2) SEND จาก ExcessBuy.amount -> ต่อ productId และรวมต่อหมวด
     const sendGroups = await prisma.excessBuy.groupBy({
@@ -95,7 +95,7 @@ export async function GET(req: Request) {
     const sendPerProd = new Map<number, number>();
     for (const g of sendGroups) sendPerProd.set(g.productId!, Number(g._sum.amount || 0));
 
-    const sendProdIds = uniq(sendGroups.map(g => g.productId).filter((x): x is number => !!x));
+    const sendProdIds = uniq(sendGroups.map((g:any) => g.productId).filter((x): x is number => !!x));
 
     // รวม product ที่ปรากฏทั้ง inflow หรือ send
     const allProdIds = uniq([...inflowProdIds, ...sendProdIds]);

@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
       orderBy: [{ id: 'asc' }],
     })
 
-    const items = rows.map(r => ({
+    const items = rows.map((r:any) => ({
       id: r.id,
       category: r.product?.category ?? null,
       number: r.product?.number ?? null,
