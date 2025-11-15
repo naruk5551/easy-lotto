@@ -176,30 +176,21 @@ export async function POST(req: Request) {
     // 4) ทำงานกับ DB ทั้งหมดใน transaction เดียว (product + order + orderItem)
     const result = await withPrismaRetry(() =>
       prisma.$transaction(async (tx) => {
-        // 4.1 preload Product ที่มีอยู่แล้วในหมวดนี้ + เลขเหล่านี้
-        const existing = await tx.product.findMany({
+        // 🚀 4.1 สร้าง Product ที่จำเป็นทั้งหมดแบบ bulk ทีเดียว
+        //    แล้วปล่อยให้ unique index + skipDuplicates จัดการเลขที่มีอยู่แล้ว
+        await tx.product.createMany({
+          data: numbers.map((n) => ({
+            category: prismaCategory,
+            number: n,
+          })),
+          skipDuplicates: true,
+        });
+
+        // 4.2 ดึง product ที่เกี่ยวข้องทั้งหมดแค่ครั้งเดียว
+        const allProducts = await tx.product.findMany({
           where: { category: prismaCategory, number: { in: numbers } },
           select: { id: true, number: true },
         });
-
-        const existMap = new Map(existing.map((p) => [p.number, p.id]));
-        const missing = numbers.filter((n) => !existMap.has(n));
-
-        // 4.2 สร้าง Product ที่ยังไม่มี (bulk)
-        if (missing.length) {
-          await tx.product.createMany({
-            data: missing.map((n) => ({ category: prismaCategory, number: n })),
-            skipDuplicates: true,
-          });
-        }
-
-        // 4.3 ดึง id ให้ครบสำหรับทุกเลขในชุดนี้
-        const allProducts = missing.length
-          ? await tx.product.findMany({
-              where: { category: prismaCategory, number: { in: numbers } },
-              select: { id: true, number: true },
-            })
-          : existing;
 
         const idMap = new Map(allProducts.map((p) => [p.number, p.id]));
 
@@ -217,25 +208,26 @@ export async function POST(req: Request) {
           };
         });
 
-        // 4.4 สร้าง Order ก่อน
+        // 4.3 สร้าง Order แค่ 1 แถว
         const order = await tx.order.create({
           data: {
             createdAt: new Date(), // UTC เหมือนเดิม
-            // เดิมใช้ user: { connect: { id: userId } } → ผล DB เท่ากันกับ set userId ตรง ๆ
             userId,
           },
           select: { id: true },
         });
 
-        // ใส่ orderId ให้ทุกรายการ แล้ว createMany ทีเดียว
+        // 4.4 เติม orderId แล้วยิง createMany ครั้งเดียว
         const rowsWithOrder = orderItemsData.map((row) => ({
           ...row,
           orderId: order.id,
         }));
 
-        await tx.orderItem.createMany({
-          data: rowsWithOrder,
-        });
+        if (rowsWithOrder.length) {
+          await tx.orderItem.createMany({
+            data: rowsWithOrder,
+          });
+        }
 
         return { orderId: order.id };
       }),
