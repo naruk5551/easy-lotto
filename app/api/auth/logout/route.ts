@@ -1,9 +1,19 @@
-import { NextResponse } from "next/server";
-import { clearSessionCookie } from "@/lib/auth";
+// app/api/auth/logout/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { clearSessionCookie } from '@/lib/auth';
 
-export async function POST() {
-  // เคลียร์ session cookie
-  const res = NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"));
+export async function POST(req: NextRequest) {
+  // origin จาก request จริง (รองรับทุก env)
+  const url = new URL('/', req.nextUrl.origin);
+
+  // ใช้ 302 ให้ browser เปลี่ยนเป็น GET เมื่อ redirect ไปหน้า /
+  const res = NextResponse.redirect(url, 302);
+
+  // เคลียร์ session cookie ตามเดิม
   clearSessionCookie(res);
+
+  // กัน cache หน้านี้ไว้หน่อย
+  res.headers.set('Cache-Control', 'no-store');
+
   return res;
 }
