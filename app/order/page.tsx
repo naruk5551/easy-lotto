@@ -9,6 +9,14 @@ type Category = 'TOP3'|'TOD3'|'TOP2'|'BOTTOM2'|'RUN_TOP'|'RUN_BOTTOM';
 type Row = { number:string; priceMain:string; priceTod?:string; reverse:boolean; };
 type TW = { id:number; startAt:string; endAt:string; note?:string|null };
 
+// ✅ ใช้เก็บข้อมูลที่ normalize แล้ว (จากฟอร์ม)
+type NormalizedRow = {
+  number: string;
+  main: number;
+  tod: number;
+  reverse: boolean;
+};
+
 const onlyDigits = (s:string)=>s.replace(/\D+/g,'');
 function requiredLength(cat:Category){
   if(cat==='TOP3'||cat==='TOD3') return 3;
@@ -64,6 +72,41 @@ function generateReverseNumbers(num: string){
   return [num];
 }
 
+/** ✅ สร้างข้อความสรุป "แถวสุดท้าย" จาก normalized rows */
+function buildLastSummary(
+  normalized: NormalizedRow[],
+  category: Category
+): string | null {
+  const numLen = requiredLength(category);
+  const isTop3 = category === 'TOP3';
+
+  for (let i = normalized.length - 1; i >= 0; i--) {
+    const n = normalized[i];
+    if (!n) continue;
+    if (!n.number || n.number.length !== numLen) continue;
+
+    // TOP3: อาจมีทั้ง main + tod
+    if (isTop3) {
+      if (n.main <= 0 && n.tod <= 0) continue;
+
+      const parts: string[] = [];
+      if (n.main > 0) parts.push(`3 ตัวบน = ${n.main.toLocaleString()} บาท`);
+      if (n.tod > 0) parts.push(`3 โต๊ด = ${n.tod.toLocaleString()} บาท`);
+
+      if (!parts.length) continue;
+
+      return `บันทึกเรียบร้อย — ล่าสุด: ${n.number} (${parts.join(' , ')})`;
+    }
+
+    // หมวดอื่น: ใช้ main อย่างเดียว
+    if (n.main > 0) {
+      return `บันทึกเรียบร้อย — ล่าสุด: ${n.number} (${catLabel(category)}) = ${n.main.toLocaleString()} บาท`;
+    }
+  }
+
+  return null;
+}
+
 export default function OrderPage(){
   const [category,setCategory]=useState<Category>('TOP3');
   const [rows,setRows]=useState<Row[]>(()=>emptyRows('TOP3'));
@@ -87,15 +130,11 @@ export default function OrderPage(){
     }
   }
 
-  // 🔧 แก้ตรงนี้: เรียก /api/time-window/latest แค่ครั้งเดียวตอน mount
-  // แล้วให้ setNow ทำงานทุก 30 วิ โดยไม่เรียก API ซ้ำ
   useEffect(()=>{
-    loadActiveWindow();                 // เรียกครั้งเดียวตอนเปิดหน้า
-
+    loadActiveWindow();
     const t=setInterval(()=>{
-      setNow(Date.now());               // อัปเดตเวลาไว้เช็ค inWindow อย่างเดียว
+      setNow(Date.now());
     },30000);
-
     return ()=>clearInterval(t);
   },[]);
 
@@ -127,12 +166,11 @@ export default function OrderPage(){
     }
 
     // Normalize ข้อมูลทุกแถวครั้งเดียว
-    const normalized = rows.map(r => {
+    const normalized: NormalizedRow[] = rows.map(r => {
       const numberDigits = onlyDigits(r.number).slice(0, numLen);
       const mainNum = Number(r.priceMain || 0);
       const todNum  = Number(r.priceTod || 0);
       return {
-        raw: r,
         number: numberDigits,
         main: mainNum,
         tod: todNum,
@@ -156,6 +194,9 @@ export default function OrderPage(){
         return;
       }
     }
+
+    // ✅ เตรียมข้อความ "แถวสุดท้าย" จากข้อมูลที่กำลังจะบันทึก
+    const lastSummary = buildLastSummary(normalized, category);
 
     showBanner('info','กำลังลงข้อมูล…');
 
@@ -234,7 +275,8 @@ export default function OrderPage(){
         if(!r.ok) throw new Error(await r.text());
       }
 
-      showBanner('success','บันทึกเรียบร้อย');
+      // ✅ ใช้ lastSummary ถ้ามี ไม่งั้น fallback ข้อความเดิม
+      showBanner('success', lastSummary || 'บันทึกเรียบร้อย');
       setRows(emptyRows(category));
       setTimeout(()=>{ firstNumberInputRef.current?.focus(); }, 0);
     }catch(err:any){

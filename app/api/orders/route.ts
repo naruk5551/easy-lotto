@@ -148,8 +148,8 @@ export async function POST(req: Request) {
           number.length === 3
             ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”'
             : number.length === 2
-            ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
-            : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
+              ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
+              : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
         throw new Error(
           `แถวที่ ${idx + 1}: หมวด ${catTH(
             prismaCategory,
@@ -233,7 +233,18 @@ export async function POST(req: Request) {
       }),
     );
 
-    return NextResponse.json({ ok: true, orderId: result.orderId });
+    const last = normalized[normalized.length - 1];
+
+    return NextResponse.json({
+      ok: true,
+      orderId: result.orderId,
+      lastItem: {
+        number: last.number,
+        price: last.price,
+        sumAmount: last.sumAmount,
+        category: prismaCategory,
+      },
+    });
   } catch (e: any) {
     console.error('❌ /api/orders error:', e);
     const msg =
