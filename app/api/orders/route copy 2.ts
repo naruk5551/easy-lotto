@@ -101,11 +101,7 @@ export async function POST(req: Request) {
     }
 
     // 2) รับค่าจาก client
-    const body = await req.json().catch(() => null);
-    if (!body) {
-      return new NextResponse('invalid json', { status: 400 });
-    }
-
+    const body = await req.json();
     const { category, items } = body as {
       category: string;
       items: Array<{ number: string; priceMain?: number; priceTod?: number }>;
@@ -114,9 +110,7 @@ export async function POST(req: Request) {
     // ใช้ userId จาก header / cookie แทนค่าที่ client ส่งมา
     const userId = getMeId(req);
     if (!userId) {
-      return new NextResponse('ไม่พบ user ที่ล็อกอิน (missing x-user-id)', {
-        status: 401,
-      });
+      return new NextResponse('ไม่พบ user ที่ล็อกอิน (missing x-user-id)', { status: 401 });
     }
 
     if (!category) return new NextResponse('กรุณาระบุหมวด', { status: 400 });
@@ -127,7 +121,7 @@ export async function POST(req: Request) {
     const prismaCategory = toPrismaCategory(category);
     const expectLen = requiredLength(prismaCategory);
 
-    // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก” + normalize ให้เสร็จก่อนแตะ DB
+    // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก”
     const normalized: { number: string; price: number; sumAmount: number }[] = [];
     const numbersSet = new Set<string>();
 
@@ -145,15 +139,11 @@ export async function POST(req: Request) {
       }
       if (number.length !== expectLen) {
         const hint =
-          number.length === 3
-            ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”'
-            : number.length === 2
-            ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
-            : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
+          number.length === 3 ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”' :
+          number.length === 2 ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”' :
+          'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
         throw new Error(
-          `แถวที่ ${idx + 1}: หมวด ${catTH(
-            prismaCategory,
-          )} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`,
+          `แถวที่ ${idx + 1}: หมวด ${catTH(prismaCategory)} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`
         );
       }
       if (
@@ -167,81 +157,65 @@ export async function POST(req: Request) {
       numbersSet.add(number);
     }
 
-    if (!normalized.length) {
-      return NextResponse.json({ ok: true, orderId: null });
-    }
-
+    // 4) เตรียม/สร้าง Product ตามหมวดหมู่ที่ถูกต้อง
     const numbers = Array.from(numbersSet);
 
-    // 4) ทำงานกับ DB ทั้งหมดใน transaction เดียว (product + order + orderItem)
-    const result = await withPrismaRetry(() =>
-      prisma.$transaction(async (tx) => {
-        // 4.1 preload Product ที่มีอยู่แล้วในหมวดนี้ + เลขเหล่านี้
-        const existing = await tx.product.findMany({
+    const existing: { id: number; number: string }[] = await withPrismaRetry(() =>
+      prisma.product.findMany({
+        where: { category: prismaCategory, number: { in: numbers } },
+        select: { id: true, number: true },
+      })
+    );
+    const existMap = new Map(existing.map((p) => [p.number, p.id]));
+
+    const missing = numbers.filter((n) => !existMap.has(n));
+
+    let idMap: Map<string, number>;
+
+    if (missing.length) {
+      await withPrismaRetry(() =>
+        prisma.product.createMany({
+          data: missing.map((n) => ({ category: prismaCategory, number: n })),
+          skipDuplicates: true,
+        })
+      );
+
+      // ดึง id อีกรอบให้ครบ (ทั้งเก่า + ใหม่)
+      const all: { id: number; number: string }[] = await withPrismaRetry(() =>
+        prisma.product.findMany({
           where: { category: prismaCategory, number: { in: numbers } },
           select: { id: true, number: true },
-        });
+        })
+      );
+      idMap = new Map(all.map((p) => [p.number, p.id]));
+    } else {
+      // ถ้าไม่มีเลขใหม่ ใช้ผลจาก existing ได้เลย ไม่ต้อง query ซ้ำ
+      idMap = existMap;
+    }
 
-        const existMap = new Map(existing.map((p) => [p.number, p.id]));
-        const missing = numbers.filter((n) => !existMap.has(n));
-
-        // 4.2 สร้าง Product ที่ยังไม่มี (bulk)
-        if (missing.length) {
-          await tx.product.createMany({
-            data: missing.map((n) => ({ category: prismaCategory, number: n })),
-            skipDuplicates: true,
-          });
-        }
-
-        // 4.3 ดึง id ให้ครบสำหรับทุกเลขในชุดนี้
-        const allProducts = missing.length
-          ? await tx.product.findMany({
-              where: { category: prismaCategory, number: { in: numbers } },
-              select: { id: true, number: true },
-            })
-          : existing;
-
-        const idMap = new Map(allProducts.map((p) => [p.number, p.id]));
-
-        // safety: ทุกเลขต้องมี productId
-        const orderItemsData = normalized.map((it) => {
-          const productId = idMap.get(it.number);
-          if (!productId) {
-            throw new Error(`ไม่พบสินค้าเลข ${it.number}`);
-          }
-          return {
-            orderId: 0, // จะใส่จริงหลังสร้าง order แล้ว
-            productId,
-            price: it.price,
-            sumAmount: it.sumAmount,
-          };
-        });
-
-        // 4.4 สร้าง Order ก่อน
-        const order = await tx.order.create({
-          data: {
-            createdAt: new Date(), // UTC เหมือนเดิม
-            // เดิมใช้ user: { connect: { id: userId } } → ผล DB เท่ากันกับ set userId ตรง ๆ
-            userId,
+    // 5) บันทึก Order + Items
+    const order: { id: number } = await withPrismaRetry(() =>
+      prisma.order.create({
+        data: {
+          createdAt: new Date(), // UTC
+          user: { connect: { id: userId } }, // 👈 ใช้ userId จาก cookie/header
+          items: {
+            create: normalized.map((it) => {
+              const productId = idMap.get(it.number);
+              if (!productId) throw new Error(`ไม่พบสินค้าเลข ${it.number}`);
+              return {
+                price: it.price,
+                sumAmount: it.sumAmount,
+                product: { connect: { id: productId } },
+              };
+            }),
           },
-          select: { id: true },
-        });
-
-        // ใส่ orderId ให้ทุกรายการ แล้ว createMany ทีเดียว
-        const rowsWithOrder = orderItemsData.map((row) => ({
-          ...row,
-          orderId: order.id,
-        }));
-
-        await tx.orderItem.createMany({
-          data: rowsWithOrder,
-        });
-
-        return { orderId: order.id };
-      }),
+        },
+        include: { items: true },
+      })
     );
 
-    return NextResponse.json({ ok: true, orderId: result.orderId });
+    return NextResponse.json({ ok: true, orderId: order.id });
   } catch (e: any) {
     console.error('❌ /api/orders error:', e);
     const msg =
