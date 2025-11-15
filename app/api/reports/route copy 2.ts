@@ -54,39 +54,38 @@ async function isItemLocked(createdAt: Date): Promise<boolean> {
 }
 
 /**
- * สร้างฟังก์ชันตรวจ locked จากรายการ batch ที่ทับช่วง [from, to)
- * - ถ้าไม่ได้ส่ง batches เข้ามา จะ query หาเหมือนเดิม (พฤติกรรมเดิม)
- * - ถ้าส่งมาแล้ว จะไม่ query DB ซ้ำ (ใช้ข้อมูลที่ดึงมาแล้ว)
+ * สำหรับ GET: preload ช่วง settleBatch ทั้งหมดที่ทับช่วง [from, to)
+ * แล้วคืนฟังก์ชันตรวจ locked ในหน่วยความจำ (แทนการยิง DB ทีละแถว)
+ * พฤติกรรมเหมือน isItemLocked ทุกประการ
  */
 async function buildLockedCheckerForRange(
   from: Date,
-  to: Date,
-  batchesArg?: { from: Date; to: Date }[],
+  to: Date
 ): Promise<(createdAt: Date) => boolean> {
-  let batches = batchesArg;
+  // เอาเฉพาะ batch ที่ช่วงเวลาทับกับ [from, to)
+  const batches = await prisma.settleBatch.findMany({
+    where: {
+      from: { lt: to },
+      to: { gt: from },
+    },
+    select: { from: true, to: true },
+  });
 
-  if (!batches) {
-    batches = await prisma.settleBatch.findMany({
-      where: {
-        from: { lt: to },
-        to: { gt: from },
-      },
-      select: { from: true, to: true },
-    });
-  }
-
-  if (!batches || !batches.length) {
+  if (!batches.length) {
     return () => false;
   }
 
+  // แปลงเป็นช่วงเวลาแบบตัวเลขเพื่อเช็คเร็ว ๆ
   const intervals = batches
     .map((b) => [b.from.getTime(), b.to.getTime()] as [number, number])
-    .sort((a, b) => a[0] - b[0]);
+    .sort((a, b) => a[0] - b[0]); // sort ตาม from
 
   return (createdAt: Date) => {
     const ts = createdAt.getTime();
+    // linear scan ก็พอเพราะจำนวน batch โดยทั่วไปน้อย
     for (const [start, end] of intervals) {
       if (ts < start) {
+        // intervals sort แล้ว ถ้าเลยก่อนช่วงนี้ แปลว่าไม่อยู่ในช่วงไหนแน่นอน
         return false;
       }
       if (ts >= start && ts < end) {
@@ -123,8 +122,6 @@ export async function GET(req: Request) {
       200,
       Math.max(1, parseIntQ(url.searchParams.get('pageSize'), 10)),
     );
-    const skip = (page - 1) * pageSize;
-
     const from = parseDateQ(url.searchParams.get('from'));
     const to = parseDateQ(url.searchParams.get('to'));
     const q = (url.searchParams.get('q') || '').trim();
@@ -145,12 +142,10 @@ export async function GET(req: Request) {
       );
     }
 
-    const where: any = {
-      createdAt: { gte: from, lt: to },
-    };
+    const where: any = { createdAt: { gte: from, lt: to } };
 
     if (ownOnly && meId) {
-      where.order = { userId: meId };
+      where.order = { userId: meId }; // กรองผ่าน relation Order
     }
 
     if (q) {
@@ -167,13 +162,13 @@ export async function GET(req: Request) {
       };
     }
 
-    // ดึงทุกอย่างที่ต้องใช้ในรอบเดียว
-    const [total, rows, settleBatches, windows, latest] = await Promise.all([
+    // นับ total + ดึง rows พร้อมกันเพื่อประหยัดเวลา round trip
+    const [total, rows] = await Promise.all([
       prisma.orderItem.count({ where }),
       prisma.orderItem.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
         select: {
           id: true,
@@ -183,26 +178,12 @@ export async function GET(req: Request) {
           product: { select: { category: true, number: true } },
         },
       }),
-      prisma.settleBatch.findMany({
-        where: {
-          from: { lt: to },
-          to: { gt: from },
-        },
-        select: { from: true, to: true },
-      }),
-      prisma.timeWindow.findMany({
-        orderBy: { id: 'asc' },
-        select: { id: true, startAt: true, endAt: true, note: true },
-      }),
-      prisma.timeWindow.findFirst({
-        orderBy: { id: 'desc' },
-        select: { id: true, startAt: true, endAt: true, note: true },
-      }),
     ]);
 
-    // preload settleBatch ทั้งช่วง [from, to) แล้วใช้เช็คทีหลัง (ไม่ยิง DB ซ้ำ)
-    const isLockedInRange = await buildLockedCheckerForRange(from, to, settleBatches);
+    // preload settleBatch ทั้งช่วง [from, to) แล้วใช้เช็คทีหลัง
+    const isLockedInRange = await buildLockedCheckerForRange(from, to);
 
+    // ติดธง locked ต่อแถว (logic เดิมทุกอย่าง แต่ไม่ยิง DB ซ้ำ)
     const items = rows.map((r: any) => {
       const locked = isLockedInRange(r.createdAt);
       return {
@@ -222,6 +203,17 @@ export async function GET(req: Request) {
         locked,
       };
     });
+
+    const [windows, latest] = await Promise.all([
+      prisma.timeWindow.findMany({
+        orderBy: { id: 'asc' },
+        select: { id: true, startAt: true, endAt: true, note: true },
+      }),
+      prisma.timeWindow.findFirst({
+        orderBy: { id: 'desc' },
+        select: { id: true, startAt: true, endAt: true, note: true },
+      }),
+    ]);
 
     return NextResponse.json({
       items,

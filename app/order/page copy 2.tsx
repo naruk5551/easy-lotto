@@ -87,18 +87,14 @@ export default function OrderPage(){
     }
   }
 
-  // 🔧 แก้ตรงนี้: เรียก /api/time-window/latest แค่ครั้งเดียวตอน mount
-  // แล้วให้ setNow ทำงานทุก 30 วิ โดยไม่เรียก API ซ้ำ
   useEffect(()=>{
-    loadActiveWindow();                 // เรียกครั้งเดียวตอนเปิดหน้า
-
+    loadActiveWindow();
     const t=setInterval(()=>{
-      setNow(Date.now());               // อัปเดตเวลาไว้เช็ค inWindow อย่างเดียว
+      setNow(Date.now());
+      loadActiveWindow();
     },30000);
-
     return ()=>clearInterval(t);
   },[]);
-
   const inWindow=useMemo(()=>{
     if(!tw) return false;
     const s=new Date(tw.startAt).getTime();
@@ -126,7 +122,7 @@ export default function OrderPage(){
       return;
     }
 
-    // Normalize ข้อมูลทุกแถวครั้งเดียว
+    // 🔹 Normalize ข้อมูลทุกแถวครั้งเดียว ใช้ทั้ง validate + payload
     const normalized = rows.map(r => {
       const numberDigits = onlyDigits(r.number).slice(0, numLen);
       const mainNum = Number(r.priceMain || 0);
@@ -140,11 +136,12 @@ export default function OrderPage(){
       };
     });
 
-    // validate ตาม logic เดิม
+    // 🔹 validate ตาม logic เดิม แต่ใช้ข้อมูล normalize แล้ว
     for(let i=0;i<rows.length;i++){
       const r = rows[i];
       const n = normalized[i];
 
+      // ข้ามแถวว่าง ตามเงื่อนไขเดิม
       if(!r.number && !r.priceMain && !(showTod && r.priceTod)) continue;
 
       if(n.number.length!==numLen){
@@ -157,10 +154,12 @@ export default function OrderPage(){
       }
     }
 
+    // ✅ แสดงแบนเนอร์ “กำลังลงข้อมูล…” ทันทีที่เริ่มบันทึก
     showBanner('info','กำลังลงข้อมูล…');
 
     try{
       if(category==='TOP3'){
+        // TOP3 (main) — อาจกลับเลข
         const top3Raw = normalized
           .map(n=>({ number:n.number, priceMain:n.main, reverse:n.reverse }))
           .filter(x=>x.number && x.priceMain>0);
@@ -171,6 +170,7 @@ export default function OrderPage(){
           return [p, ...perms.map(n=>({ ...p, number:n, reverse:false }))];
         });
 
+        // TOD3 (ราคาโต๊ด) — ไม่กลับเลข
         const tod3Items = normalized
           .map(n=>({ number:n.number, priceMain:n.tod }))
           .filter(x=>x.number && x.priceMain>0);
@@ -205,6 +205,7 @@ export default function OrderPage(){
           if(!r2.ok) throw new Error(await r2.text());
         }
       }else{
+        // หมวดอื่น ๆ ส่งตามหมวดที่เลือก (รองรับกลับเลขสำหรับ 2 ตัวบน/ล่าง)
         const base = normalized
           .map(n=>({ number:n.number, priceMain:n.main, reverse:n.reverse }))
           .filter(x=>x.number && x.priceMain>0);
@@ -234,6 +235,7 @@ export default function OrderPage(){
         if(!r.ok) throw new Error(await r.text());
       }
 
+      // ✅ บันทึกสำเร็จ: รีเซ็ตตาราง และโฟกัสช่องเลขแถวแรก
       showBanner('success','บันทึกเรียบร้อย');
       setRows(emptyRows(category));
       setTimeout(()=>{ firstNumberInputRef.current?.focus(); }, 0);
