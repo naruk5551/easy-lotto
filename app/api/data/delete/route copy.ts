@@ -50,11 +50,15 @@ export async function POST(req: Request) {
 
     await prisma.$transaction(async (tx: any) => {
       // ----- 1) ลบ Order (+Items via Cascade) ภายในช่วงงวด -----
-      const delOrders = await tx.order.deleteMany({
+      const ordersInRange = await tx.order.findMany({
+        where: { createdAt: { gte: startAt, lt: endAt } },
+        select: { id: true },
+      });
+      result.orders = ordersInRange.length;
+
+      await tx.order.deleteMany({
         where: { createdAt: { gte: startAt, lt: endAt } },
       });
-      // เดิมใช้ .findMany().length -> ตอนนี้ใช้ count จาก deleteMany แทน (ค่าเท่ากัน)
-      result.orders = delOrders.count;
 
       // ----- 2) หา SettleBatch ที่ "ซ้อนทับ" ช่วงงวด แล้วลบ ExcessBuy ของ batch เหล่านี้ -----
       // overlap: from < endAt && to > startAt

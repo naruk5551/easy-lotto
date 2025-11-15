@@ -53,49 +53,6 @@ async function isItemLocked(createdAt: Date): Promise<boolean> {
   return !!batch;
 }
 
-/**
- * สำหรับ GET: preload ช่วง settleBatch ทั้งหมดที่ทับช่วง [from, to)
- * แล้วคืนฟังก์ชันตรวจ locked ในหน่วยความจำ (แทนการยิง DB ทีละแถว)
- * พฤติกรรมเหมือน isItemLocked ทุกประการ
- */
-async function buildLockedCheckerForRange(
-  from: Date,
-  to: Date
-): Promise<(createdAt: Date) => boolean> {
-  // เอาเฉพาะ batch ที่ช่วงเวลาทับกับ [from, to)
-  const batches = await prisma.settleBatch.findMany({
-    where: {
-      from: { lt: to },
-      to: { gt: from },
-    },
-    select: { from: true, to: true },
-  });
-
-  if (!batches.length) {
-    return () => false;
-  }
-
-  // แปลงเป็นช่วงเวลาแบบตัวเลขเพื่อเช็คเร็ว ๆ
-  const intervals = batches
-    .map((b) => [b.from.getTime(), b.to.getTime()] as [number, number])
-    .sort((a, b) => a[0] - b[0]); // sort ตาม from
-
-  return (createdAt: Date) => {
-    const ts = createdAt.getTime();
-    // linear scan ก็พอเพราะจำนวน batch โดยทั่วไปน้อย
-    for (const [start, end] of intervals) {
-      if (ts < start) {
-        // intervals sort แล้ว ถ้าเลยก่อนช่วงนี้ แปลว่าไม่อยู่ในช่วงไหนแน่นอน
-        return false;
-      }
-      if (ts >= start && ts < end) {
-        return true;
-      }
-    }
-    return false;
-  };
-}
-
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -118,10 +75,7 @@ export async function GET(req: Request) {
 
     // query
     const page = Math.max(1, parseIntQ(url.searchParams.get('page'), 1));
-    const pageSize = Math.min(
-      200,
-      Math.max(1, parseIntQ(url.searchParams.get('pageSize'), 10)),
-    );
+    const pageSize = Math.min(200, Math.max(1, parseIntQ(url.searchParams.get('pageSize'), 10)));
     const from = parseDateQ(url.searchParams.get('from'));
     const to = parseDateQ(url.searchParams.get('to'));
     const q = (url.searchParams.get('q') || '').trim();
@@ -162,47 +116,38 @@ export async function GET(req: Request) {
       };
     }
 
-    // นับ total + ดึง rows พร้อมกันเพื่อประหยัดเวลา round trip
-    const [total, rows] = await Promise.all([
-      prisma.orderItem.count({ where }),
-      prisma.orderItem.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: {
-          id: true,
-          price: true,
-          createdAt: true,
-          order: { select: { userId: true } },
-          product: { select: { category: true, number: true } },
-        },
-      }),
-    ]);
+    const total = await prisma.orderItem.count({ where });
 
-    // preload settleBatch ทั้งช่วง [from, to) แล้วใช้เช็คทีหลัง
-    const isLockedInRange = await buildLockedCheckerForRange(from, to);
-
-    // ติดธง locked ต่อแถว (logic เดิมทุกอย่าง แต่ไม่ยิง DB ซ้ำ)
-    const items = rows.map((r: any) => {
-      const locked = isLockedInRange(r.createdAt);
-      return {
-        id: r.id,
-        number: r.product.number,
-        category: r.product.category,
-        price: Number(r.price),
-        createdAt: r.createdAt.toISOString(),
-        userId: r.order?.userId ?? null,
-        canEdit:
-          !locked &&
-          (ownOnly
-            ? true
-            : meId != null
-            ? r.order?.userId === meId
-            : false),
-        locked,
-      };
+    const rows = await prisma.orderItem.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        price: true,
+        createdAt: true,
+        order: { select: { userId: true } },
+        product: { select: { category: true, number: true } },
+      },
     });
+
+    // ติดธง locked ต่อแถว (ไม่เปลี่ยน logic อื่น)
+    const items = await Promise.all(
+      rows.map(async (r:any) => {
+        const locked = await isItemLocked(r.createdAt);
+        return {
+          id: r.id,
+          number: r.product.number,
+          category: r.product.category,
+          price: Number(r.price),
+          createdAt: r.createdAt.toISOString(),
+          userId: r.order?.userId ?? null,
+          canEdit: !locked && (ownOnly ? true : meId != null ? r.order?.userId === meId : false),
+          locked,
+        };
+      }),
+    );
 
     const [windows, latest] = await Promise.all([
       prisma.timeWindow.findMany({

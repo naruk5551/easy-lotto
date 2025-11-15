@@ -105,6 +105,7 @@ export async function POST(req: Request) {
     const { category, items } = body as {
       category: string;
       items: Array<{ number: string; priceMain?: number; priceTod?: number }>;
+      // userId?: number;  // 👈 ไม่ใช้แล้ว อ่านจาก cookie/header แทน
     };
 
     // ใช้ userId จาก header / cookie แทนค่าที่ client ส่งมา
@@ -122,12 +123,7 @@ export async function POST(req: Request) {
     const expectLen = requiredLength(prismaCategory);
 
     // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก”
-    const normalized: { number: string; price: number; sumAmount: number }[] = [];
-    const numbersSet = new Set<string>();
-
-    for (let idx = 0; idx < items.length; idx++) {
-      const it = items[idx];
-
+    const normalized = items.map((it, idx) => {
       const number = onlyDigits(String(it.number));
       const priceMain = Number(it.priceMain ?? 0);
       const priceTod = Number(it.priceTod ?? 0);
@@ -146,19 +142,15 @@ export async function POST(req: Request) {
           `แถวที่ ${idx + 1}: หมวด ${catTH(prismaCategory)} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`
         );
       }
-      if (
-        !(Number.isFinite(price) && price > 0) ||
-        !(Number.isFinite(sumAmount) && sumAmount > 0)
-      ) {
+      if (!(Number.isFinite(price) && price > 0) || !(Number.isFinite(sumAmount) && sumAmount > 0)) {
         throw new Error(`แถวที่ ${idx + 1}: ราคาไม่ถูกต้อง`);
       }
 
-      normalized.push({ number, price, sumAmount });
-      numbersSet.add(number);
-    }
+      return { number, price, sumAmount };
+    });
 
     // 4) เตรียม/สร้าง Product ตามหมวดหมู่ที่ถูกต้อง
-    const numbers = Array.from(numbersSet);
+    const numbers = Array.from(new Set(normalized.map((x) => x.number)));
 
     const existing: { id: number; number: string }[] = await withPrismaRetry(() =>
       prisma.product.findMany({
@@ -169,9 +161,6 @@ export async function POST(req: Request) {
     const existMap = new Map(existing.map((p) => [p.number, p.id]));
 
     const missing = numbers.filter((n) => !existMap.has(n));
-
-    let idMap: Map<string, number>;
-
     if (missing.length) {
       await withPrismaRetry(() =>
         prisma.product.createMany({
@@ -179,26 +168,23 @@ export async function POST(req: Request) {
           skipDuplicates: true,
         })
       );
-
-      // ดึง id อีกรอบให้ครบ (ทั้งเก่า + ใหม่)
-      const all: { id: number; number: string }[] = await withPrismaRetry(() =>
-        prisma.product.findMany({
-          where: { category: prismaCategory, number: { in: numbers } },
-          select: { id: true, number: true },
-        })
-      );
-      idMap = new Map(all.map((p) => [p.number, p.id]));
-    } else {
-      // ถ้าไม่มีเลขใหม่ ใช้ผลจาก existing ได้เลย ไม่ต้อง query ซ้ำ
-      idMap = existMap;
     }
+
+    // ดึง id อีกรอบให้ครบ
+    const all: { id: number; number: string }[] = await withPrismaRetry(() =>
+      prisma.product.findMany({
+        where: { category: prismaCategory, number: { in: numbers } },
+        select: { id: true, number: true },
+      })
+    );
+    const idMap = new Map(all.map((p) => [p.number, p.id]));
 
     // 5) บันทึก Order + Items
     const order: { id: number } = await withPrismaRetry(() =>
       prisma.order.create({
         data: {
           createdAt: new Date(), // UTC
-          user: { connect: { id: userId } }, // 👈 ใช้ userId จาก cookie/header
+          user: { connect: { id: userId } },   // 👈 ใช้ userId จาก cookie/header
           items: {
             create: normalized.map((it) => {
               const productId = idMap.get(it.number);
@@ -216,12 +202,10 @@ export async function POST(req: Request) {
     );
 
     return NextResponse.json({ ok: true, orderId: order.id });
+
   } catch (e: any) {
     console.error('❌ /api/orders error:', e);
-    const msg =
-      typeof e?.message === 'string' && e.message
-        ? e.message
-        : 'เกิดข้อผิดพลาดระหว่างบันทึก';
+    const msg = typeof e?.message === 'string' && e.message ? e.message : 'เกิดข้อผิดพลาดระหว่างบันทึก';
     return new NextResponse(msg, { status: 400 });
   }
 }

@@ -23,7 +23,7 @@ type Body = {
   manualThreshold?: Partial<Record<Cat, number>>;
 };
 
-// ---------- GET: ดึง CapRule แถวล่าสุด ----------
+// ---------- NEW: GET ดึง CapRule แถวล่าสุด ----------
 export async function GET() {
   try {
     const last = await prisma.capRule.findFirst({
@@ -73,7 +73,7 @@ export async function GET() {
 
     return NextResponse.json({
       hasCap: true,
-      mode: last.mode, // 'MANUAL' | 'AUTO'
+      mode: last.mode,                    // 'MANUAL' | 'AUTO'
       convertTod3ToTop3: !!last.convertTod3ToTop3,
       autoCount,
       manualThreshold,
@@ -87,6 +87,7 @@ export async function GET() {
   }
 }
 
+// ---------- เดิม: POST preview / preview_and_save ----------
 /** สร้าง permutations ของเลข 3 หลักแบบไม่ซ้ำ */
 function perms3(num: string): string[] {
   if (!num || num.length !== 3) return [num];
@@ -98,7 +99,6 @@ function perms3(num: string): string[] {
   ]));
 }
 
-// ---------- POST: preview / preview_and_save ----------
 export async function POST(req: Request) {
   try {
     const body = await req.json() as Body;
@@ -108,34 +108,41 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'invalid time range' }, { status: 400 });
     }
 
-    const mode: 'MANUAL' | 'AUTO' = body.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+    const mode = body.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
     const convert = !!body.convertTod3ToTop3;
 
-    // --- เตรียมยอดรวมต่อเลขต่อหมวดจาก OrderItem (ปรับให้ใช้คิวรีเดียว JOIN Product) ---
-    const rows = await prisma.$queryRaw<
-      { category: Cat; number: string; amount: number }[]
-    >`
-      SELECT
-        p.category AS "category",
-        p.number   AS "number",
-        COALESCE(SUM(oi."sumAmount"), SUM(oi.price), 0)::float AS "amount"
-      FROM "OrderItem" oi
-      JOIN "Product" p ON p.id = oi."productId"
-      WHERE oi."createdAt" >= ${from} AND oi."createdAt" < ${to}
-      GROUP BY p.category, p.number
-    `;
+    // --- เตรียมยอดรวมต่อเลขต่อหมวดจาก OrderItem ---
+    const g = await prisma.orderItem.groupBy({
+      by: ['productId'],
+      where: { createdAt: { gte: from, lt: to } },
+      _sum: { sumAmount: true, price: true }
+    });
+    const ids = g
+      .map((g: { productId: number | null }) => g.productId)
+      .filter((x: number | null): x is number => !!x);
+    const prods = ids.length ? await prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, category: true, number: true }
+    }) : [];
 
     // cat -> Map<numberString, total>
     const totals: Record<Cat, Map<string, number>> = {
       TOP3: new Map(), TOD3: new Map(), TOP2: new Map(),
-      BOTTOM2: new Map(), RUN_TOP: new Map(), RUN_BOTTOM: new Map(),
+      BOTTOM2: new Map(), RUN_TOP: new Map(), RUN_BOTTOM: new Map()
     };
+    const prodMeta = new Map<number, { cat: Cat, number: string }>();
+    prods.forEach((p: { id: number; category: Cat; number: string }) =>
+      prodMeta.set(p.id, { cat: p.category as Cat, number: p.number })
+    );
 
-    for (const row of rows) {
-      const cat = row.category;
+
+    for (const row of g) {
+      const meta = row.productId ? prodMeta.get(row.productId) : undefined;
+      if (!meta) continue;
+      const cat = meta.cat;
       if (!CATS.includes(cat)) continue;
-      const num = row.number;
-      const amt = Number(row.amount ?? 0);
+      const num = meta.number;
+      const amt = Number(row._sum.sumAmount ?? row._sum.price ?? 0);
       if (!Number.isFinite(amt) || amt <= 0) continue;
       totals[cat].set(num, (totals[cat].get(num) || 0) + amt);
     }
@@ -157,7 +164,7 @@ export async function POST(req: Request) {
 
     // --- หา threshold / topRanks ---
     let thresholds: Partial<Record<Cat, number>> = {};
-    let topRanks: Partial<Record<Cat, Array<{ number: string; total: number }>>> = {};
+    let topRanks: Partial<Record<Cat, Array<{ number: string, total: number }>>> = {};
 
     if (mode === 'AUTO') {
       const count = body.autoCount || {};
@@ -167,11 +174,9 @@ export async function POST(req: Request) {
         arr.sort((a, b) => b.total - a.total); // มาก→น้อย
         const topN = N > 0 ? arr.slice(0, N) : [];
         topRanks[cat] = topN;
-
-        thresholds[cat] =
-          topN.length > 0
-            ? topN.reduce((min, x) => Math.min(min, x.total), Infinity)
-            : 0;
+        thresholds[cat] = (topN.length > 0)
+          ? topN.reduce((min, x) => Math.min(min, x.total), Infinity)
+          : 0;
 
         if (!Number.isFinite(thresholds[cat]!)) thresholds[cat] = 0;
       }
@@ -225,7 +230,7 @@ export async function POST(req: Request) {
           effectiveAtBottom2: from,
           effectiveAtRunTop: from,
           effectiveAtRunBottom: from,
-        },
+        }
       });
     }
 
@@ -235,13 +240,11 @@ export async function POST(req: Request) {
       from: from.toISOString(),
       to: to.toISOString(),
       thresholds,
-      topRanks,
+      topRanks
     });
+
   } catch (e: any) {
     console.error('CAP ERROR:', e);
-    return new NextResponse(
-      typeof e?.message === 'string' ? e.message : 'Cap error',
-      { status: 500 },
-    );
+    return new NextResponse(typeof e?.message === 'string' ? e.message : 'Cap error', { status: 500 });
   }
 }

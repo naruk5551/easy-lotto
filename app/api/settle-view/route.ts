@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 //import { Category } from '@prisma/client';
 
-const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const
-type Category = (typeof CATEGORIES)[number]
+const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
+type Category = (typeof CATEGORIES)[number];
 
 function parseLocalishToUTC(s?: string | null): Date | undefined {
   if (!s) return;
@@ -24,47 +24,92 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const page = Math.max(1, Number(searchParams.get('page') || '1'));
-    const pageSize = Math.max(1, Math.min(100, Number(searchParams.get('pageSize') || '10')));
+    const pageSize = Math.max(
+      1,
+      Math.min(100, Number(searchParams.get('pageSize') || '10')),
+    );
+    const offset = (page - 1) * pageSize;
 
     const from = parseLocalishToUTC(searchParams.get('from'));
     const to = parseLocalishToUTC(searchParams.get('to'));
 
     // ถ้าไม่ส่งช่วงมา ใช้ TW ล่าสุดทั้งงวด
-    let startAt: Date;
-    let endAt: Date;
     const tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
-    if (!tw) return NextResponse.json({ from: null, to: null, total: 0, items: [], page, pageSize });
+    if (!tw) {
+      return NextResponse.json({
+        from: null,
+        to: null,
+        total: 0,
+        items: [],
+        page,
+        pageSize,
+      });
+    }
 
-    startAt = tw.startAt;
-    endAt = tw.endAt;
+    const startAt = tw.startAt;
+    const endAt = tw.endAt;
 
-    const usedFrom = from ? new Date(Math.max(startAt.getTime(), from.getTime())) : startAt;
-    const usedTo = to ? new Date(Math.min(endAt.getTime(), to.getTime())) : endAt;
+    const usedFrom = from
+      ? new Date(Math.max(startAt.getTime(), from.getTime()))
+      : startAt;
+    const usedTo = to
+      ? new Date(Math.min(endAt.getTime(), to.getTime()))
+      : endAt;
 
-    // รวมยอดส่งจาก ExcessBuy สำหรับช่วงย่อย
-    const rows = (await prisma.$queryRaw<
+    // --- 1) นับจำนวน group ทั้งหมด (เหมือนเดิมคือจำนวน row ทั้งชุด) ---
+    const totalRows = await prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS "count"
+      FROM (
+        SELECT p.category, p.number
+        FROM "ExcessBuy" ex
+        JOIN "SettleBatch" b ON b.id = ex."batchId"
+        JOIN "Product" p ON p.id = ex."productId"
+        WHERE b."from" >= ${usedFrom} AND b."to" <= ${usedTo}
+        GROUP BY p.category, p.number
+      ) AS sub
+    `;
+    const total = Number(totalRows[0]?.count || 0);
+
+    // --- 2) ดึงเฉพาะ page ที่ต้องการ + เรียงแบบ "ทุกหมวดเริ่มที่แถวแรก" ---
+    const rows = await prisma.$queryRaw<
       { category: Category; number: string; totalSend: number }[]
     >`
-      SELECT p.category AS "category",
-             p.number   AS "number",
-             COALESCE(SUM(ex.amount),0)::float AS "totalSend"
-      FROM "ExcessBuy" ex
-      JOIN "SettleBatch" b ON b.id = ex."batchId"
-      JOIN "Product" p ON p.id = ex."productId"
-      WHERE b."from" >= ${usedFrom} AND b."to" <= ${usedTo}
-      GROUP BY p.category, p.number
-      ORDER BY p.category, p.number
-    `) as any[];
-
-    // page
-    const total = rows.length;
-    const slice = rows.slice((page - 1) * pageSize, page * pageSize);
+      WITH grouped AS (
+        SELECT
+          p.category AS "category",
+          p.number   AS "number",
+          COALESCE(SUM(ex.amount),0)::float AS "totalSend"
+        FROM "ExcessBuy" ex
+        JOIN "SettleBatch" b ON b.id = ex."batchId"
+        JOIN "Product" p ON p.id = ex."productId"
+        WHERE b."from" >= ${usedFrom} AND b."to" <= ${usedTo}
+        GROUP BY p.category, p.number
+      ),
+      ranked AS (
+        SELECT
+          g."category",
+          g."number",
+          g."totalSend",
+          ROW_NUMBER() OVER (
+            PARTITION BY g."category"
+            ORDER BY g."totalSend" DESC, g."number"
+          ) AS rn
+        FROM grouped g
+      )
+      SELECT
+        "category",
+        "number",
+        "totalSend"
+      FROM ranked
+      ORDER BY rn, "category"
+      LIMIT ${pageSize} OFFSET ${offset}
+    `;
 
     return NextResponse.json({
       from: usedFrom.toISOString(),
       to: usedTo.toISOString(),
       total,
-      items: slice,
+      items: rows,
       page,
       pageSize,
     });

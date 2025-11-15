@@ -16,9 +16,9 @@ export async function GET() {
     const active = await prisma.timeWindow.findFirst({
       where: {
         startAt: { lte: now },
-        endAt:   { gte: now },
+        endAt: { gte: now },
       },
-      // ถ้ามีทับซ้อนกันหลายช่วง ให้เลือกช่วงที่ "ใกล้สิ้นสุดที่สุด"
+      // ถ้ามีทับซ้อนกันหลายช่วง ให้เลือกช่วงที่ "ใกล้สิ้นสุดที่สุด" เพื่อกันกรณีพิเศษ
       orderBy: { endAt: 'asc' },
       select: {
         id: true,
@@ -29,9 +29,11 @@ export async function GET() {
     });
 
     // เคลียร์แคชตอบกลับ เพื่อให้หน้า order เห็นสถานะล่าสุดเสมอ
-    const res = NextResponse.json(active);
-    res.headers.set('Cache-Control', 'no-store');
-    return res;
+    return NextResponse.json(active, {
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
   } catch (e: any) {
     console.error('GET /api/time-window/latest error:', e);
     return new NextResponse(e?.message || 'Internal Error', { status: 500 });

@@ -4,56 +4,50 @@ export const runtime = 'nodejs';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-/** แปลง input เป็น Date UTC (ปลอดภัย / เร็วขึ้น / ไม่เปลี่ยน behavior เดิม) */
+/** แปลง input (string) เป็น Date (UTC) อย่างปลอดภัย */
 function toUTC(v?: unknown): Date | null {
   if (v == null) return null;
-  const s = typeof v === 'string' ? v.trim() : String(v).trim();
+  const s = String(v).trim();
   if (!s) return null;
 
-  // กรณี ISO มี timezone → ให้ Date parse ตรง ๆ
+  // ถ้ามี timezone หรือ Z อยู่แล้ว -> ให้ Date แปลงตรง ๆ
   if (/[zZ]|[+\-]\d{2}:\d{2}$/.test(s)) {
     const d = new Date(s);
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // รูปแบบ 'YYYY-MM-DD HH:mm' หรือ 'YYYY-MM-DDTHH:mm'
-  const replaced = s.includes(' ') ? s.replace(' ', 'T') : s;
-  const m = replaced.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)$/);
+  // รูปแบบ 'YYYY-MM-DD HH:mm' / 'YYYY-MM-DDTHH:mm' -> ตีความเป็นเวลา UTC
+  const m = s.replace(' ', 'T').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)$/);
   if (m) {
     const d = new Date(`${m[1]}T${m[2]}Z`);
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // เผื่อ ISO อื่น ๆ
+  // เผื่อกรณีเป็น ISO ปรกติ
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }
 
-// ---------------------------------------------------
-// GET
-// ---------------------------------------------------
+// GET: ?latest=1  -> ดึงงวดล่าสุด
+//      ?page=1&pageSize=20 -> รายการทั้งหมดแบบแบ่งหน้า (เรียง id DESC)
 export async function GET(req: NextRequest) {
   try {
-    const search = new URL(req.url).searchParams;
-
-    // === กรณี latest ===
-    if (search.get('latest') === '1') {
+    const { searchParams } = new URL(req.url);
+    const latest = searchParams.get('latest');
+    if (latest === '1') {
       const row = await prisma.timeWindow.findFirst({
         orderBy: { id: 'desc' },
       });
       return NextResponse.json(row ?? null);
     }
 
-    // === กรณี list ===
-    const page = Math.max(1, Number(search.get('page') ?? 1));
-    const pageSize = Math.max(1, Math.min(200, Number(search.get('pageSize') ?? 20)));
-    const skip = (page - 1) * pageSize;
+    const page = Math.max(1, Number(searchParams.get('page') ?? 1));
+    const pageSize = Math.max(1, Math.min(200, Number(searchParams.get('pageSize') ?? 20)));
 
-    // ใช้ Promise.all (ดีที่สุดแล้ว)
     const [items, total] = await Promise.all([
       prisma.timeWindow.findMany({
         orderBy: { id: 'desc' },
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
       }),
       prisma.timeWindow.count(),
@@ -66,16 +60,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ---------------------------------------------------
-// POST
-// ---------------------------------------------------
+// POST: { startAt: string|ISO, endAt: string|ISO, note?: string }
 export async function POST(req: NextRequest) {
   try {
-    // parse body เร็วขึ้นกว่าเดิมเล็กน้อย
     const body = await req.json().catch(() => ({}));
-
-    const startAt = toUTC(body.startAt);
-    const endAt = toUTC(body.endAt);
+    const startAt = toUTC(body?.startAt);
+    const endAt = toUTC(body?.endAt);
+    const note = (body?.note ?? '').toString().trim() || null;
 
     if (!startAt || !endAt) {
       return NextResponse.json({ error: 'ต้องระบุ startAt / endAt' }, { status: 400 });
@@ -83,12 +74,6 @@ export async function POST(req: NextRequest) {
     if (endAt <= startAt) {
       return NextResponse.json({ error: 'endAt ต้องมากกว่า startAt' }, { status: 400 });
     }
-
-    // note: ลด allocation (ไม่ toString ไม่ trim ซ้ำ)
-    const note =
-      body.note != null
-        ? String(body.note).trim() || null
-        : null;
 
     const created = await prisma.timeWindow.create({
       data: { startAt, endAt, note: note ?? undefined },

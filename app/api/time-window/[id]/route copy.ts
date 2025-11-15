@@ -71,87 +71,18 @@ export async function PUT(
 }
 
 // DELETE /api/time-window/:id
-// ✅ ลบข้อมูลทุกอย่างของงวดนั้น แล้วค่อยลบ TimeWindow เอง
 export async function DELETE(
   _req: Request,
-  ctx: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> } // ⬅️ เช่นกัน ต้อง await
 ) {
   try {
-    const { id: idStr } = await ctx.params;
+    const { id: idStr } = await ctx.params; // ⬅️ await ก่อนใช้
     const id = Number(idStr);
     if (!Number.isInteger(id) || id <= 0) {
       return new NextResponse('id ไม่ถูกต้อง', { status: 400 });
     }
 
-    // ดึงช่วงงวด
-    const tw = await prisma.timeWindow.findUnique({
-      where: { id },
-      select: { id: true, startAt: true, endAt: true },
-    });
-    if (!tw) {
-      return new NextResponse('ไม่พบรายการ', { status: 404 });
-    }
-
-    const startAt: Date = tw.startAt;
-    const endAt: Date = tw.endAt;
-
-    await prisma.$transaction(async (tx) => {
-      // ----- 1) ลบ Order (+ OrderItem via cascade) ภายในช่วงงวด -----
-      await tx.order.deleteMany({
-        where: { createdAt: { gte: startAt, lt: endAt } },
-      });
-
-      // ----- 2) หา SettleBatch ที่ "ซ้อนทับ" ช่วงงวด แล้วลบ ExcessBuy + SettleBatch -----
-      // overlap: from < endAt && to > startAt
-      const batches = await tx.settleBatch.findMany({
-        where: {
-          from: { lt: endAt },
-          to: { gt: startAt },
-        },
-        select: { id: true },
-      });
-
-      const batchIds = batches.map((b) => b.id);
-
-      if (batchIds.length > 0) {
-        await tx.excessBuy.deleteMany({
-          where: { batchId: { in: batchIds } },
-        });
-
-        await tx.settleBatch.deleteMany({
-          where: { id: { in: batchIds } },
-        });
-      }
-
-      // ลบ ExcessBuy ที่สร้างภายในช่วงงวด แต่ไม่ผูก batch
-      await tx.excessBuy.deleteMany({
-        where: {
-          batchId: null,
-          createdAt: { gte: startAt, lt: endAt },
-        },
-      });
-
-      // ----- 3) ลบ AcceptSelf ภายในช่วงงวด -----
-      await tx.acceptSelf.deleteMany({
-        where: { createdAt: { gte: startAt, lt: endAt } },
-      });
-
-      // ----- 4) ลบ PrizeSetting / SettleRun ของงวดนี้ -----
-      await tx.prizeSetting.deleteMany({
-        where: { timeWindowId: tw.id },
-      });
-
-      await tx.settleRun.deleteMany({
-        where: { timeWindowId: tw.id },
-      });
-
-      // ----- 5) ลบ TimeWindow เองสุดท้าย -----
-      await tx.timeWindow.delete({
-        where: { id: tw.id },
-      });
-    });
-
-    // ✅ response เดิม: แค่ ok: true
+    await prisma.timeWindow.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     console.error('DELETE /api/time-window/[id] error:', e);

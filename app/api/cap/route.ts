@@ -27,58 +27,56 @@ type Body = {
 function perms3(num: string): string[] {
   if (!num || num.length !== 3) return [num];
   const [a, b, c] = num.split('');
-  return Array.from(new Set([
-    `${a}${b}${c}`, `${a}${c}${b}`,
-    `${b}${a}${c}`, `${b}${c}${a}`,
-    `${c}${a}${b}`, `${c}${b}${a}`,
-  ]));
+  return Array.from(
+    new Set([
+      `${a}${b}${c}`, `${a}${c}${b}`,
+      `${b}${a}${c}`, `${b}${c}${a}`,
+      `${c}${a}${b}`, `${c}${b}${a}`,
+    ]),
+  );
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json() as Body;
+    const body = (await req.json()) as Body;
     const from = parseISO(body.from);
     const to = parseISO(body.to);
     if (!from || !to) {
       return NextResponse.json({ error: 'invalid time range' }, { status: 400 });
     }
 
-    const mode = body.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+    const mode: 'MANUAL' | 'AUTO' = body.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
     const convert = !!body.convertTod3ToTop3;
 
-    // --- เตรียมยอดรวมต่อเลขต่อหมวดจาก OrderItem ---
-    const g = await prisma.orderItem.groupBy({
-      by: ['productId'],
-      where: { createdAt: { gte: from, lt: to } },
-      _sum: { sumAmount: true, price: true }
-    });
-    const ids = g
-      .map((x: { productId: number | null }) => x.productId)
-      .filter((x: number | null): x is number => !!x);
-
-    const prods = ids.length ? await prisma.product.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, category: true, number: true }
-    }) : [];
+    // --- เตรียมยอดรวมต่อเลขต่อหมวดจาก OrderItem (คิวรีเดียว JOIN Product) ---
+    const rows = await prisma.$queryRaw<
+      { category: Cat; number: string; amount: number }[]
+    >`
+      SELECT 
+        p.category AS "category",
+        p.number   AS "number",
+        COALESCE(SUM(oi."sumAmount"), SUM(oi.price), 0)::float AS "amount"
+      FROM "OrderItem" oi
+      JOIN "Product" p ON p.id = oi."productId"
+      WHERE oi."createdAt" >= ${from} AND oi."createdAt" < ${to}
+      GROUP BY p.category, p.number
+    `;
 
     // cat -> Map<numberString, total>
     const totals: Record<Cat, Map<string, number>> = {
-      TOP3: new Map(), TOD3: new Map(), TOP2: new Map(),
-      BOTTOM2: new Map(), RUN_TOP: new Map(), RUN_BOTTOM: new Map()
+      TOP3: new Map(),
+      TOD3: new Map(),
+      TOP2: new Map(),
+      BOTTOM2: new Map(),
+      RUN_TOP: new Map(),
+      RUN_BOTTOM: new Map(),
     };
-    const prodMeta = new Map<number, { cat: Cat, number: string }>();
-    prods.forEach((p: { id: number; category: Cat; number: string }) =>
-      prodMeta.set(p.id, { cat: p.category as Cat, number: p.number })
-    );
 
-
-    for (const row of g) {
-      const meta = row.productId ? prodMeta.get(row.productId) : undefined;
-      if (!meta) continue;
-      const cat = meta.cat;
+    for (const r of rows) {
+      const cat = r.category;
       if (!CATS.includes(cat)) continue;
-      const num = meta.number;
-      const amt = Number(row._sum.sumAmount ?? row._sum.price ?? 0);
+      const num = r.number;
+      const amt = Number(r.amount ?? 0);
       if (!Number.isFinite(amt) || amt <= 0) continue;
       totals[cat].set(num, (totals[cat].get(num) || 0) + amt);
     }
@@ -101,21 +99,26 @@ export async function POST(req: Request) {
 
     // --- หา threshold / topRanks ---
     let thresholds: Partial<Record<Cat, number>> = {};
-    let topRanks: Partial<Record<Cat, Array<{ number: string, total: number }>>> = {};
+    let topRanks: Partial<Record<Cat, Array<{ number: string; total: number }>>> = {};
 
     if (mode === 'AUTO') {
       const count = body.autoCount || {};
       for (const cat of CATS) {
         const N = Number(count[cat] ?? 0);
-        const arr = Array.from(totals[cat]).map(([number, total]) => ({ number, total }));
+        const arr = Array.from(totals[cat]).map(([number, total]) => ({
+          number,
+          total,
+        }));
         arr.sort((a, b) => b.total - a.total); // มาก→น้อย
         const topN = N > 0 ? arr.slice(0, N) : [];
         topRanks[cat] = topN;
-        thresholds[cat] = (topN.length > 0)
-          ? topN.reduce((min, x) => Math.min(min, x.total), Infinity)
-          : 0;
 
-        if (!Number.isFinite(thresholds[cat]!)) thresholds[cat] = 0;
+        if (topN.length > 0) {
+          // min ของ topN เพราะถูก sort จากมากไปน้อย => ตัวสุดท้ายคือ threshold
+          thresholds[cat] = topN[topN.length - 1].total;
+        } else {
+          thresholds[cat] = 0;
+        }
       }
       if (convert) thresholds.TOD3 = 0; // เน้นให้ชัด
     } else {
@@ -125,7 +128,10 @@ export async function POST(req: Request) {
         thresholds[cat] = Number.isFinite(v) && v > 0 ? v : 0;
 
         // โชว์อันดับจริงประกอบการตัดสินใจ (ไม่กระทบ threshold manual)
-        const arr = Array.from(totals[cat]).map(([number, total]) => ({ number, total }));
+        const arr = Array.from(totals[cat]).map(([number, total]) => ({
+          number,
+          total,
+        }));
         arr.sort((a, b) => b.total - a.total);
         topRanks[cat] = arr.slice(0, 30);
       }
@@ -157,12 +163,12 @@ export async function POST(req: Request) {
           autoThresholdRunTop: thresholds.RUN_TOP ?? null,
           autoThresholdRunBottom: thresholds.RUN_BOTTOM ?? null,
 
-          top3: mode === 'MANUAL' ? (body.manualThreshold?.TOP3 ?? null) : null,
-          tod3: mode === 'MANUAL' ? (body.manualThreshold?.TOD3 ?? null) : null,
-          top2: mode === 'MANUAL' ? (body.manualThreshold?.TOP2 ?? null) : null,
-          bottom2: mode === 'MANUAL' ? (body.manualThreshold?.BOTTOM2 ?? null) : null,
-          runTop: mode === 'MANUAL' ? (body.manualThreshold?.RUN_TOP ?? null) : null,
-          runBottom: mode === 'MANUAL' ? (body.manualThreshold?.RUN_BOTTOM ?? null) : null,
+          top3: mode === 'MANUAL' ? body.manualThreshold?.TOP3 ?? null : null,
+          tod3: mode === 'MANUAL' ? body.manualThreshold?.TOD3 ?? null : null,
+          top2: mode === 'MANUAL' ? body.manualThreshold?.TOP2 ?? null : null,
+          bottom2: mode === 'MANUAL' ? body.manualThreshold?.BOTTOM2 ?? null : null,
+          runTop: mode === 'MANUAL' ? body.manualThreshold?.RUN_TOP ?? null : null,
+          runBottom: mode === 'MANUAL' ? body.manualThreshold?.RUN_BOTTOM ?? null : null,
 
           effectiveAtTop3: from,
           effectiveAtTod3: from,
@@ -170,7 +176,7 @@ export async function POST(req: Request) {
           effectiveAtBottom2: from,
           effectiveAtRunTop: from,
           effectiveAtRunBottom: from,
-        }
+        },
       });
     }
 
@@ -180,11 +186,13 @@ export async function POST(req: Request) {
       from: from.toISOString(),
       to: to.toISOString(),
       thresholds,
-      topRanks
+      topRanks,
     });
-
   } catch (e: any) {
     console.error('CAP ERROR:', e);
-    return new NextResponse(typeof e?.message === 'string' ? e.message : 'Cap error', { status: 500 });
+    return new NextResponse(
+      typeof e?.message === 'string' ? e.message : 'Cap error',
+      { status: 500 },
+    );
   }
 }

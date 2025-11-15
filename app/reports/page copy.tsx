@@ -49,7 +49,6 @@ type Item = {
   category: string;
   price: number;
   createdAt: string;
-  createdAtTH?: string; // ✅ เพิ่ม field ที่คำนวณไว้ล่วงหน้า (ใช้ภายใน component เท่านั้น)
   userId?: number;
   canEdit?: boolean;
 };
@@ -150,15 +149,8 @@ export default function ReportsPage() {
 
     (async () => {
       const params = new URLSearchParams({ meta: 'only' });
-      const res = await fetch(`/api/reports?${params.toString()}`, {
-        cache: 'no-store',
-        credentials: 'include',
-      });
-      const meta = (await res.json()) as {
-        windows: TW[];
-        latest: TW | null;
-        meId?: number | null;
-      };
+      const res = await fetch(`/api/reports?${params.toString()}`, { cache: 'no-store', credentials: 'include' });
+      const meta = (await res.json()) as { windows: TW[]; latest: TW | null; meId?: number | null };
       setWindows(meta.windows || []);
       setLatest(meta.latest || null);
       if (typeof meta.meId === 'number' && meta.meId > 0) {
@@ -166,9 +158,7 @@ export default function ReportsPage() {
         setUidToStorage(meta.meId);
       }
       if (!uid && !meta.meId) {
-        setAuthWarn(
-          'กรุณาใส่ x-user-id (เช่น เพิ่ม ?uid=1 ใน URL หรือ localStorage.setItem("x-user-id","1"))',
-        );
+        setAuthWarn('กรุณาใส่ x-user-id (เช่น เพิ่ม ?uid=1 ใน URL หรือ localStorage.setItem("x-user-id","1"))');
       }
       if (meta.latest) {
         setTwId(String(meta.latest.id));
@@ -212,10 +202,7 @@ export default function ReportsPage() {
       if (q.trim()) params.set('q', q.trim());
       if (cat) params.set('cat', cat);
 
-      const res = await fetch(`/api/reports?${params.toString()}`, {
-        cache: 'no-store',
-        credentials: 'include',
-      });
+      const res = await fetch(`/api/reports?${params.toString()}`, { cache: 'no-store', credentials: 'include' });
       if (res.status === 401) {
         setItems([]);
         setTotal(0);
@@ -229,14 +216,7 @@ export default function ReportsPage() {
         setMeId(data.meId);
         setUidToStorage(data.meId);
       }
-
-      // ✅ เตรียม createdAtTH ล่วงหน้า เพื่อลดงานตอน render
-      const mappedItems: Item[] = (data.items || []).map((it) => ({
-        ...it,
-        createdAtTH: fmtThai(it.createdAt),
-      }));
-
-      setItems(mappedItems);
+      setItems(data.items || []);
       setTotal(data.total || 0);
       setPage(goPage);
       setBanner(`กรองสำเร็จ • ${rangeLabel}`);
@@ -279,13 +259,7 @@ export default function ReportsPage() {
       const res = await fetch('/api/reports', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          id: editRow.id,
-          number: editNum,
-          category: editCat,
-          price: editPrice,
-          ownOnly: true,
-        }),
+        body: JSON.stringify({ id: editRow.id, number: editNum, category: editCat, price: editPrice, ownOnly: true }),
         credentials: 'include',
       });
       if (!res.ok) {
@@ -302,10 +276,7 @@ export default function ReportsPage() {
     if (!confirm('ยืนยันลบรายการนี้?')) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/reports?id=${id}&ownOnly=1`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      const res = await fetch(`/api/reports?id=${id}&ownOnly=1`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) {
         alert('ลบไม่สำเร็จ');
       } else {
@@ -316,18 +287,12 @@ export default function ReportsPage() {
     }
   }
 
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(total / pageSize)),
-    [total, pageSize],
-  );
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
 
   return (
     <div className="max-w-[1100px] mx-auto px-3 py-4 space-y-3">
       <div className="flex items-center gap-3">
-        <Link
-          href="/home"
-          className="px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-        >
+        <Link href="/home" className="px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700">
           กลับหน้า Home
         </Link>
         <h1 className="text-lg font-semibold">รายงาน</h1>
@@ -451,17 +416,11 @@ export default function ReportsPage() {
                     <td className="border px-2 py-1 text-center">
                       {Number(r.price).toLocaleString()}
                     </td>
-                    <td className="border px-2 py-1 text-center">
-                      {r.createdAtTH ?? fmtThai(r.createdAt)}
-                    </td>
+                    <td className="border px-2 py-1 text-center">{fmtThai(r.createdAt)}</td>
                     <td className="border px-2 py-1">
                       <div className="flex items-center justify-center gap-4">
                         <button
-                          className={`${
-                            own
-                              ? 'text-blue-600 hover:underline'
-                              : 'text-gray-400 cursor-not-allowed'
-                          }`}
+                          className={`${own ? 'text-blue-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
                           onClick={() => own && openEdit(r)}
                           disabled={!own}
                           title={own ? '' : 'แก้ไขได้เฉพาะรายการของคุณ'}
@@ -469,11 +428,7 @@ export default function ReportsPage() {
                           แก้ไข
                         </button>
                         <button
-                          className={`${
-                            own
-                              ? 'text-red-600 hover:underline'
-                              : 'text-gray-400 cursor-not-allowed'
-                          }`}
+                          className={`${own ? 'text-red-600 hover:underline' : 'text-gray-400 cursor-not-allowed'}`}
                           onClick={() => own && delRow(r.id)}
                           disabled={!own}
                           title={own ? '' : 'ลบได้เฉพาะรายการของคุณ'}
@@ -505,6 +460,7 @@ export default function ReportsPage() {
                         </span>
                       )}
                     </td>
+
                   </tr>
                 );
               })
@@ -522,7 +478,7 @@ export default function ReportsPage() {
             onChange={(e) => {
               const sz = Number(e.target.value) || 10;
               setPageSize(sz);
-              // ❌ ไม่ต้องเรียก loadData(1) ตรงนี้ ปล่อยให้ useEffect ทำ → ลด request ซ้ำ
+              loadData(1);
             }}
             className="border rounded-md px-2 py-1"
           >
@@ -590,10 +546,7 @@ export default function ReportsPage() {
               <button onClick={() => setEditOpen(false)} className="px-3 py-1.5 rounded-md border">
                 ยกเลิก
               </button>
-              <button
-                onClick={saveEdit}
-                className="px-3 py-1.5 rounded-md bg-blue-600 text-white"
-              >
+              <button onClick={saveEdit} className="px-3 py-1.5 rounded-md bg-blue-600 text-white">
                 บันทึก
               </button>
             </div>

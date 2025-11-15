@@ -155,33 +155,18 @@ export async function POST(req: NextRequest) {
       keptByKey.set(`${r.category}|${r.number}`, r.kept);
     }
 
-    // แทนที่จะ create ทีละแถว เราเก็บไว้ใน array แล้วค่อยยิง createMany ทีเดียว
-    const toInsert: { category: Category; number: string; amount: number }[] = [];
-
+    let created = 0;
     for (const { cat, number, amount } of inflowBy.values()) {
       const capAmt = capFor(cat, cap as CapRow) ?? 0;
       const target = Math.min(amount, capAmt); // รับเองได้รวมทั้งงวด
       const already = keptByKey.get(`${cat}|${number}`) ?? 0;
       const need = target - already;
       if (need > 0) {
-        toInsert.push({ category: cat, number, amount: need });
+        await prisma.acceptSelf.create({
+          data: { category: cat, number, amount: need }
+        });
+        created++;
       }
-    }
-
-    let created = 0;
-
-    if (toInsert.length > 0) {
-      // ยิง insert รอบเดียวแทนหลายรอบ
-      await prisma.acceptSelf.createMany({
-        data: toInsert.map(row => ({
-          category: row.category,
-          number: row.number,
-          amount: row.amount,
-        })),
-      });
-
-      // จำนวนแถวที่สร้าง = จำนวนรายการที่เราคิดว่า need > 0
-      created = toInsert.length;
     }
 
     return NextResponse.json({

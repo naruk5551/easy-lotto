@@ -21,7 +21,7 @@ const TH_OFFSET_MIN = 7 * 60;
 function utcToThaiLocalInput(iso: string): string {
   const d = new Date(iso); // UTC
   const msThai = d.getTime() + TH_OFFSET_MIN * 60_000;
-  const t = new Date(msThai);
+  const t = new Date(msThai); // ใช้ getUTC* เพื่อดึงคอมโพเนนต์หลัง shift แล้ว
   const y = t.getUTCFullYear();
   const m = String(t.getUTCMonth() + 1).padStart(2, '0');
   const day = String(t.getUTCDate()).padStart(2, '0');
@@ -32,6 +32,8 @@ function utcToThaiLocalInput(iso: string): string {
 
 // แปลงค่า input "YYYY-MM-DDTHH:mm" (ตีความเป็นเวลาไทย) -> ISO UTC
 function thaiLocalInputToUtcIso(v: string): string {
+  // แยกคอมโพเนนต์อย่างตรงไปตรงมา
+  // (ชั่วโมงไทย -7 ชั่วโมง) แล้วให้ Date.UTC จัดการ roll-over
   const [date, time] = v.split('T');
   const [Y, M, D] = date.split('-').map((x) => Number(x));
   const [h, mi] = time.split(':').map((x) => Number(x));
@@ -40,21 +42,18 @@ function thaiLocalInputToUtcIso(v: string): string {
 }
 
 // โชว์ช่วงไทยให้ผู้ใช้ดู
-function toThaiHuman(local: string) {
-  // local: "YYYY-MM-DD HH:mm"
-  const [d, tm] = local.split(' ');
-  const [Y, M, D] = d.split('-').map((n) => Number(n));
-  return `${D.toString().padStart(2, '0')}/${M.toString().padStart(2, '0')}/${Y} ${tm}`;
-}
 function humanThaiRange(fromIsoUTC: string, toIsoUTC: string) {
   const f = utcToThaiLocalInput(fromIsoUTC).replace('T', ' ');
   const t = utcToThaiLocalInput(toIsoUTC).replace('T', ' ');
   return `ช่วงเวลา: ${toThaiHuman(f)} – ${toThaiHuman(t)}`;
 }
-
-// ===== ค่าคงที่ / type สำหรับ grid =====
-const CATS = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
-type Cat = (typeof CATS)[number];
+function toThaiHuman(local: string) {
+  // local: "YYYY-MM-DD HH:mm"
+  const [d, tm] = local.split(' ');
+  const [Y, M, D] = d.split('-').map((n) => Number(n));
+  // แสดงแบบไทยสั้น ๆ (ไม่แปลงปีพ.ศ. เพื่อความง่าย)
+  return `${D.toString().padStart(2, '0')}/${M.toString().padStart(2, '0')}/${Y} ${tm}`;
+}
 
 // ===== Page =====
 export default function SettlePage() {
@@ -65,12 +64,11 @@ export default function SettlePage() {
   const [fromTH, setFromTH] = useState<string>(''); // "YYYY-MM-DDTHH:mm"
   const [toTH, setToTH] = useState<string>('');
 
-  // ตาราง (เก็บ "ทุกแถว" ของช่วงที่เลือก)
-  const [rows, setRows] = useState<ViewRow[]>([]);
-
-  // paging (ทำฝั่ง client)
+  // ตาราง
   const [pageSize, setPageSize] = useState<number>(10);
   const [page, setPage] = useState<number>(1);
+  const [rows, setRows] = useState<ViewRow[]>([]);
+  const [total, setTotal] = useState<number>(0);
 
   // สถานะ
   const [busy, setBusy] = useState<boolean>(false);
@@ -86,13 +84,14 @@ export default function SettlePage() {
         if (!data) return;
         setTW(data);
 
+        // default ช่วงย่อย = ทั้งงวด (ไทย)
         const fromLocal = utcToThaiLocalInput(data.startAt);
         const toLocal = utcToThaiLocalInput(data.endAt);
         setFromTH(fromLocal);
         setToTH(toLocal);
 
-        // โหลดครั้งแรกทั้งช่วง (หน้าแรก)
-        await loadAllRows(fromLocal, toLocal);
+        // โหลดตารางทันที (แสดงผลหลังตัดก็ใช้ตัวนี้เหมือนเดิม)
+        await loadView(fromLocal, toLocal, 1, pageSize);
       } catch (e) {
         console.error(e);
       }
@@ -100,49 +99,33 @@ export default function SettlePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * โหลด "ทุกแถว" ของช่วงที่กำหนด
-   * ใช้ page=1, pageSize ใหญ่ ๆ แล้วค่อยแบ่งหน้าที่ client
-   */
-  async function loadAllRows(
-    fromLocalTH: string,
-    toLocalTH: string,
-    preFromUTC?: string,
-    preToUTC?: string,
-  ) {
-    if (!fromLocalTH || !toLocalTH) return;
-
-    const fromUTC = preFromUTC ?? thaiLocalInputToUtcIso(fromLocalTH);
-    const toUTC = preToUTC ?? thaiLocalInputToUtcIso(toLocalTH);
+  async function loadView(fromLocalTH: string, toLocalTH: string, pg: number, sz: number) {
+    const fromUTC = thaiLocalInputToUtcIso(fromLocalTH);
+    const toUTC = thaiLocalInputToUtcIso(toLocalTH);
 
     const qs = new URLSearchParams({
       from: fromUTC,
       to: toUTC,
-      page: '1',
-      pageSize: '100000', // ดึงชุดใหญ่ครั้งเดียว
+      page: String(pg),
+      pageSize: String(sz),
     });
-
     const res = await fetch(`/api/settle-view?${qs.toString()}`, { cache: 'no-store' });
     if (!res.ok) {
       setRows([]);
-      setPage(1);
+      setTotal(0);
       return;
     }
     const data = (await res.json()) as ViewResp;
     setRows(data.items || []);
-    setPage(1); // ทุกครั้งที่กรองใหม่ ให้เริ่มหน้าแรกเสมอ
+    setTotal(data.total || 0);
+    setPage(pg);
   }
 
-  // กด "กรองช่วงเวลา" = ตัดช่วง (POST /api/settle) แล้วค่อยโหลดตาราง (ทุกแถว)
+  // กด "กรองช่วงเวลา" = ตัดช่วง (เรียก POST /api/settle) แล้วค่อยโหลดตาราง
   async function handleSettle() {
     try {
       setBusy(true);
       setSettleMsg('');
-      if (!fromTH || !toTH) {
-        setSettleMsg('กรุณาเลือกช่วงเวลาก่อน');
-        return;
-      }
-
       const fromUTC = thaiLocalInputToUtcIso(fromTH);
       const toUTC = thaiLocalInputToUtcIso(toTH);
 
@@ -155,12 +138,12 @@ export default function SettlePage() {
       if (!res.ok) {
         setSettleMsg(data?.error || 'ตัดช่วงไม่สำเร็จ');
       } else {
+        // โชว์ช่วงที่ตัดสำเร็จ
         const appliedFrom = data?.window?.appliedFrom ?? fromUTC;
         const appliedTo = data?.window?.appliedTo ?? toUTC;
         setSettleMsg(humanThaiRange(appliedFrom, appliedTo));
-
-        // โหลด “ทุกแถว” ของช่วงนี้ใหม่
-        await loadAllRows(fromTH, toTH, fromUTC, toUTC);
+        // รีโหลดผลลัพธ์
+        await loadView(fromTH, toTH, 1, pageSize);
       }
     } catch (e: any) {
       console.error(e);
@@ -170,8 +153,14 @@ export default function SettlePage() {
     }
   }
 
-  // ====== จัดรูปแบบตาราง: ให้แต่ละหมวดเริ่มบรรทัดที่ 1 (ใช้ rows ทั้งหมด) ======
-  const allGridRows = useMemo(() => {
+  // เปลี่ยน pageSize / หน้า
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
+
+  // ====== จัดรูปแบบตาราง: ให้แต่ละหมวดเริ่มบรรทัดที่ 1 ======
+  const CATS = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
+  type Cat = (typeof CATS)[number];
+
+  const gridRows = useMemo(() => {
     const byCat: Record<Cat, ViewRow[]> = {
       TOP3: [],
       TOD3: [],
@@ -193,19 +182,6 @@ export default function SettlePage() {
     }
     return packed;
   }, [rows]);
-
-  const totalRowCount = allGridRows.length;
-
-  // ✅ ตัดตาม page/pageSize: 1 แถวในตาราง = 1 gridRow สูงสุด = pageSize
-  const pagedGridRows = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return allGridRows.slice(start, start + pageSize);
-  }, [allGridRows, page, pageSize]);
-
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((totalRowCount || 1) / pageSize)),
-    [totalRowCount, pageSize],
-  );
 
   return (
     <div className="max-w-[1100px] mx-auto px-3 py-4 space-y-3">
@@ -253,6 +229,7 @@ export default function SettlePage() {
             {busy ? 'กำลังตัดช่วง…' : 'กรองช่วงเวลา'}
           </button>
 
+          {/* แถบผลลัพธ์ของรอบที่เพิ่งตัด */}
           {!!settleMsg && (
             <span className="ml-2 rounded-md bg-emerald-100 text-emerald-800 px-3 py-1 text-sm">
               {settleMsg}
@@ -261,7 +238,7 @@ export default function SettlePage() {
         </div>
       </div>
 
-      {/* ควบคุม page size + pagination */}
+      {/* ควบคุม page size */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span>แสดงหน้า</span>
@@ -271,8 +248,7 @@ export default function SettlePage() {
             onChange={(e) => {
               const sz = Number(e.target.value) || 10;
               setPageSize(sz);
-              setPage(1); // เปลี่ยนจำนวนแถวต่อหน้า → กลับไปหน้าแรก
-              // ❗️ไม่เรียก API ที่นี่ ต้องกด "กรองช่วงเวลา" เองถ้าต้องการคำนวณใหม่
+              loadView(fromTH, toTH, 1, sz);
             }}
           >
             {[10, 20, 50, 100].map((n) => (
@@ -283,11 +259,12 @@ export default function SettlePage() {
           </select>
         </div>
 
+        {/* pagination */}
         <div className="flex items-center gap-2">
           <button
             className="px-2 py-1 border rounded-md"
             disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => loadView(fromTH, toTH, page - 1, pageSize)}
           >
             ก่อนหน้า
           </button>
@@ -297,7 +274,7 @@ export default function SettlePage() {
           <button
             className="px-2 py-1 border rounded-md"
             disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => loadView(fromTH, toTH, page + 1, pageSize)}
           >
             ถัดไป
           </button>
@@ -318,26 +295,22 @@ export default function SettlePage() {
             </tr>
           </thead>
           <tbody>
-            {busy ? (
-              <tr>
-                <td colSpan={6} className="text-center py-6 text-gray-500">
-                  กำลังโหลด…
-                </td>
-              </tr>
-            ) : pagedGridRows.length === 0 ? (
+            {gridRows.length === 0 ? (
               <tr>
                 <td className="text-center py-6 text-gray-500" colSpan={6}>
                   — ไม่มีข้อมูล —
                 </td>
               </tr>
             ) : (
-              pagedGridRows.map((r, i) => (
+              gridRows.map((r, i) => (
                 <tr key={i}>
-                  {CATS.map((cat) => (
-                    <td key={cat} className="border px-2 py-1 align-top">
-                      {r[cat] ? `${r[cat]!.number} = ${Number(r[cat]!.totalSend)}` : ''}
-                    </td>
-                  ))}
+                  {(['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const).map(
+                    (cat) => (
+                      <td key={cat} className="border px-2 py-1 align-top">
+                        {r[cat] ? `${r[cat]!.number} = ${Number(r[cat]!.totalSend)}` : ''}
+                      </td>
+                    ),
+                  )}
                 </tr>
               ))
             )}

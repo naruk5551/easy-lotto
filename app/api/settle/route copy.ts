@@ -259,25 +259,14 @@ export async function POST(req: NextRequest) {
       if (need > 0) toCreate.push({ productId: productId as number, amount: need });
     }
 
-    // 7) บันทึกเป็น batch ใหม่ (optimize: สร้าง ExcessBuy ทีเดียวด้วย createMany)
+    // 7) บันทึกเป็น batch ใหม่
     const batch = await prisma.settleBatch.create({ data: { from: _from, to: _to } });
-
-    let created: any[] = [];
-    if (toCreate.length > 0) {
-      // ยิง insert หลายแถวทีเดียว
-      await prisma.excessBuy.createMany({
-        data: toCreate.map((row) => ({
-          productId: row.productId,
-          amount: row.amount,
-          batchId: batch.id,
-        })),
+    const created: any[] = [];
+    for (const row of toCreate) {
+      const ex = await prisma.excessBuy.create({
+        data: { productId: row.productId, amount: row.amount, batchId: batch.id },
       });
-
-      // ดึง row ที่เพิ่งสร้างทั้งหมดกลับมาให้ response ยังมีรูปแบบเดิม
-      created = await prisma.excessBuy.findMany({
-        where: { batchId: batch.id },
-        orderBy: { id: 'asc' },
-      });
+      created.push(ex);
     }
 
     return NextResponse.json({

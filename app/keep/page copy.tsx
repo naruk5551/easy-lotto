@@ -4,14 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 type TimeWindow = { id: number; startAt: string; endAt: string; note?: string | null };
 type KeepItem = { category: string; number: string } & Record<string, any>;
-type KeepViewResp = {
-  from: string;
-  to: string;
-  total: number;
-  items: KeepItem[];
-  page: number;
-  pageSize: number;
-};
+type KeepViewResp = { from: string; to: string; total: number; items: KeepItem[]; page: number; pageSize: number };
 
 const TZ = 'Asia/Bangkok';
 const TH = 'th-TH';
@@ -50,14 +43,14 @@ export default function KeepPage() {
 
   const [loading, setLoading] = useState(false);
 
-  // paging (ทำที่ฝั่ง client เอง)
+  // view/paging (ใช้ paging ของ API แต่เราจัดคอลัมน์เอง)
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // เก็บรายการ keep หลังกรอง 0 ออกแล้ว (ของทั้งช่วง)
+  // เก็บ items หลังกรอง 0 ออกแล้ว
   const [items, setItems] = useState<KeepItem[]>([]);
 
-  /* โหลดงวดล่าสุด -> เซ็ตค่า default ให้ input */
+  /* โหลดงวดล่าสุด -> เซ็ตค่า default ให้ input (ไม่คำนวณอัตโนมัติ) */
   useEffect(() => {
     (async () => {
       const r = await fetch('/api/time-window/latest', { cache: 'no-store' });
@@ -75,7 +68,7 @@ export default function KeepPage() {
     return `ช่วงเวลา: ${fmtThai(tw.startAt)} – ${fmtThai(tw.endAt)}`;
   }, [tw]);
 
-  /* กดกรอง → POST /api/keep (บันทึก AcceptSelf) → GET /api/keep-view (ดึง “ทั้งช่วง”) */
+  /* กดกรอง → POST /api/keep (บันทึก AcceptSelf) → GET /api/keep-view (ดึงมาโชว์) */
   async function handleFilter(goPage = 1) {
     if (!fromLocal || !toLocal) return;
     setLoading(true);
@@ -83,43 +76,41 @@ export default function KeepPage() {
       const fromISO = toUTCFromLocalInput(fromLocal)!;
       const toISO = toUTCFromLocalInput(toLocal)!;
 
-      // 1) บันทึก AcceptSelf ตามช่วง (เหมือนเดิม)
+      // 1) ค่อยบันทึก AcceptSelf
       await fetch('/api/keep', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: fromISO, to: toISO }),
       });
 
-      // 2) โหลด keep-view “รวบหน้าเดียว” แล้วค่อยแบ่งหน้าเองที่ฝั่ง client
+      // 2) โหลดรายการ keep-view
       const p = new URLSearchParams({
-        page: '1',
-        pageSize: '100000', // ดึงชุดใหญ่ครั้งเดียว
+        page: String(goPage),
+        pageSize: String(pageSize),
         from: fromISO,
         to: toISO,
       });
       const res = await fetch('/api/keep-view?' + p.toString(), { cache: 'no-store' });
       const data = (await res.json()) as KeepViewResp;
 
-      // 3) ตัด 0 บาทออก และเรียงตามหมวด + keep มาก → น้อย + เลข
-      const filtered = (data.items || [])
-        .filter((x) => readAmount(x) > 0)
-        .sort((a, b) => {
-          if (a.category !== b.category) return a.category.localeCompare(b.category);
-          const ak = readAmount(a);
-          const bk = readAmount(b);
-          if (ak !== bk) return bk - ak; // มาก → น้อย
-          return String(a.number).localeCompare(String(b.number));
-        });
+      // 3) ตัด 0 บาท และเรียงก่อนจัดคอลัมน์
+      const filtered = (data.items || []).filter((x) => readAmount(x) > 0);
+      filtered.sort((a, b) => {
+        if (a.category !== b.category) return a.category.localeCompare(b.category);
+        if (a.number !== b.number) return a.number.localeCompare(b.number);
+        return 0;
+      });
 
       setItems(filtered);
-      setPage(goPage); // เริ่มที่หน้าที่สั่ง (ปกติส่ง 1)
+      setPage(goPage);
     } finally {
       setLoading(false);
     }
   }
 
-  /* เตรียมข้อมูลแบบ “หกคอลัมน์” ของทั้งช่วง */
-  const { allGridRows, totalRowCount } = useMemo(() => {
+  /* สร้างตารางแบบ “หกคอลัมน์” โดยให้แต่ละหมวดเริ่มบรรทัดที่ 1 */
+  const gridRows = useMemo(() => {
+    // แยกตามหมวด
     const byCat: Record<(typeof CATS)[number], KeepItem[]> = {
       TOP3: [],
       TOD3: [],
@@ -128,36 +119,19 @@ export default function KeepPage() {
       RUN_TOP: [],
       RUN_BOTTOM: [],
     };
-
     for (const it of items) {
       const cat = it.category as (typeof CATS)[number];
       if (CATS.includes(cat)) byCat[cat].push(it);
     }
-
     const maxLen = Math.max(...CATS.map((c) => byCat[c].length), 0);
     const rows: Array<Partial<Record<(typeof CATS)[number], KeepItem>>> = [];
-
     for (let i = 0; i < maxLen; i++) {
       const row: Partial<Record<(typeof CATS)[number], KeepItem>> = {};
-      for (const c of CATS) {
-        if (byCat[c][i]) row[c] = byCat[c][i];
-      }
+      for (const c of CATS) if (byCat[c][i]) row[c] = byCat[c][i];
       rows.push(row);
     }
-
-    return { allGridRows: rows, totalRowCount: maxLen };
+    return rows;
   }, [items]);
-
-  // slice ตาม page / pageSize  →  1 “รายการในตาราง” = 1 แถว สูงสุด pageSize แถว
-  const pagedGridRows = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return allGridRows.slice(start, start + pageSize);
-  }, [allGridRows, page, pageSize]);
-
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((totalRowCount || 1) / pageSize)),
-    [totalRowCount, pageSize],
-  );
 
   return (
     <div className="p-4 space-y-4">
@@ -170,11 +144,7 @@ export default function KeepPage() {
       </div>
 
       {/* งวด */}
-      {tw && (
-        <div className="inline-block px-3 py-2 rounded bg-emerald-100 text-emerald-900">
-          {badgeText}
-        </div>
-      )}
+      {tw && <div className="inline-block px-3 py-2 rounded bg-emerald-100 text-emerald-900">{badgeText}</div>}
 
       {/* ฟอร์มกรอง (สไตล์เหมือนหน้า settle) */}
       <div className="border rounded p-3 space-y-2">
@@ -207,49 +177,21 @@ export default function KeepPage() {
               ช่วงเวลา: {fmtThai(new Date(fromLocal))} – {fmtThai(new Date(toLocal))}
             </div>
           )}
-        </div>
-      </div>
 
-      {/* แถวควบคุมหน้า / pageSize (ตำแหน่งเหมือนหน้า settle) */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span>แสดงหน้า</span>
-          <select
-            value={pageSize}
-            onChange={(e) => {
-              const sz = Number(e.target.value) || 10;
-              setPageSize(sz);
-              setPage(1); // เปลี่ยนขนาดหน้าให้กลับไปหน้าแรก
-              // ไม่ยิง API ทันที ต้องกด "กรองช่วงเวลา" เองหากต้องการคำนวณ keep ใหม่
-            }}
-            className="border rounded px-2 py-1"
-          >
-            {[10, 20, 50, 100].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="px-3 py-1 rounded border"
-            disabled={page <= 1 || loading}
-          >
-            ก่อนหน้า
-          </button>
-          <span>
-            หน้า {page} / {totalPages}
-          </span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            className="px-3 py-1 rounded border"
-            disabled={loading || page >= totalPages}
-          >
-            ถัดไป
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <span>แสดงหน้า</span>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))} // ไม่ auto โหลด ต้องกดกรอง
+              className="border rounded px-2 py-1"
+            >
+              {[10, 20, 50, 100].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -273,14 +215,14 @@ export default function KeepPage() {
                   กำลังโหลด…
                 </td>
               </tr>
-            ) : pagedGridRows.length === 0 ? (
+            ) : gridRows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-6 text-center text-gray-400">
                   — ไม่มีข้อมูล —
                 </td>
               </tr>
             ) : (
-              pagedGridRows.map((row, i) => (
+              gridRows.map((row, i) => (
                 <tr key={i} className="border-t align-top">
                   {CATS.map((c) => (
                     <td key={c} className="p-2 align-top">
@@ -296,6 +238,25 @@ export default function KeepPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* pager */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => handleFilter(Math.max(1, page - 1))}
+          className="px-3 py-1 rounded border"
+          disabled={page <= 1 || loading}
+        >
+          ก่อนหน้า
+        </button>
+        <div>หน้า {page}</div>
+        <button
+          onClick={() => handleFilter(page + 1)}
+          className="px-3 py-1 rounded border"
+          disabled={loading || gridRows.length < pageSize}
+        >
+          ถัดไป
+        </button>
       </div>
     </div>
   );

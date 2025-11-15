@@ -25,14 +25,13 @@ function catLabel(cat:Category){
     case 'RUN_BOTTOM': return 'วิ่งล่าง';
   }
 }
-const thFormatter = new Intl.DateTimeFormat('th-TH', {
-  year:'numeric',month:'2-digit',day:'2-digit',
-  hour:'2-digit',minute:'2-digit',hour12:false,
-  timeZone:'Asia/Bangkok'
-});
 function fmtTH(dt:any){
   const d=new Date(dt);
-  return thFormatter.format(d);
+  return new Intl.DateTimeFormat('th-TH',{
+    year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',hour12:false,
+    timeZone:'Asia/Bangkok'
+  }).format(d);
 }
 function emptyRows(cat:Category){
   const base:Row={number:'',priceMain:'',priceTod:cat==='TOP3'?'':undefined,reverse:false};
@@ -71,6 +70,7 @@ export default function OrderPage(){
   const [tw,setTw]=useState<TW|null>(null);
   const [now,setNow]=useState<number>(Date.now());
 
+  // ⬇️ เพิ่ม ref สำหรับโฟกัสช่องเลขบรรทัดแรกหลังบันทึกเสร็จ
   const firstNumberInputRef = useRef<HTMLInputElement|null>(null);
 
   const showBanner=(type:'success'|'error'|'info',text:string)=>{
@@ -89,10 +89,7 @@ export default function OrderPage(){
 
   useEffect(()=>{
     loadActiveWindow();
-    const t=setInterval(()=>{
-      setNow(Date.now());
-      loadActiveWindow();
-    },30000);
+    const t=setInterval(()=>{ setNow(Date.now()); loadActiveWindow(); },30000);
     return ()=>clearInterval(t);
   },[]);
   const inWindow=useMemo(()=>{
@@ -104,7 +101,6 @@ export default function OrderPage(){
 
   const numLen = requiredLength(category);
   const showTod = category==='TOP3';
-  const allowReverse = category==='TOP3'||category==='TOP2'||category==='BOTTOM2';
 
   function onCategoryChange(cat:Category){
     setCategory(cat);
@@ -115,53 +111,39 @@ export default function OrderPage(){
     setRows(prev=>prev.map((r,i)=>i===idx?{...r,...patch}:r));
   }
 
+  function validate(){
+    for(let i=0;i<rows.length;i++){
+      const r=rows[i];
+      if(!r.number && !r.priceMain && !(showTod && r.priceTod)) continue;
+      if(onlyDigits(r.number).length!==numLen){
+        showBanner('error',`แถวที่ ${i+1}: ต้องกรอกเลข ${numLen} หลัก — ${catLabel(category)}`);
+        return false;
+      }
+      const main = Number(r.priceMain||0);
+      const tod  = Number(r.priceTod||0);
+      if(main<=0 && !(showTod && tod>0)){
+        showBanner('error',`แถวที่ ${i+1}: กรุณากรอกราคา`);
+        return false;
+      }
+    }
+    return true;
+  }
+
   async function onSubmit(e:React.FormEvent){
     e.preventDefault();
-    if(!inWindow){
-      showBanner('error',tw?'หมดเวลาลงสินค้า':'ยังไม่มีรอบที่เปิดอยู่');
-      return;
-    }
-
-    // 🔹 Normalize ข้อมูลทุกแถวครั้งเดียว ใช้ทั้ง validate + payload
-    const normalized = rows.map(r => {
-      const numberDigits = onlyDigits(r.number).slice(0, numLen);
-      const mainNum = Number(r.priceMain || 0);
-      const todNum  = Number(r.priceTod || 0);
-      return {
-        raw: r,
-        number: numberDigits,
-        main: mainNum,
-        tod: todNum,
-        reverse: r.reverse,
-      };
-    });
-
-    // 🔹 validate ตาม logic เดิม แต่ใช้ข้อมูล normalize แล้ว
-    for(let i=0;i<rows.length;i++){
-      const r = rows[i];
-      const n = normalized[i];
-
-      // ข้ามแถวว่าง ตามเงื่อนไขเดิม
-      if(!r.number && !r.priceMain && !(showTod && r.priceTod)) continue;
-
-      if(n.number.length!==numLen){
-        showBanner('error',`แถวที่ ${i+1}: ต้องกรอกเลข ${numLen} หลัก — ${catLabel(category)}`);
-        return;
-      }
-      if(n.main<=0 && !(showTod && n.tod>0)){
-        showBanner('error',`แถวที่ ${i+1}: กรุณากรอกราคา`);
-        return;
-      }
-    }
+    if(!inWindow){ showBanner('error',tw?'หมดเวลาลงสินค้า':'ยังไม่มีรอบที่เปิดอยู่'); return; }
+    if(!validate()) return;
 
     // ✅ แสดงแบนเนอร์ “กำลังลงข้อมูล…” ทันทีที่เริ่มบันทึก
     showBanner('info','กำลังลงข้อมูล…');
 
+    const allowReverse = category==='TOP3'||category==='TOP2'||category==='BOTTOM2';
+
     try{
       if(category==='TOP3'){
         // TOP3 (main) — อาจกลับเลข
-        const top3Raw = normalized
-          .map(n=>({ number:n.number, priceMain:n.main, reverse:n.reverse }))
+        const top3Raw = rows
+          .map(r=>({ number:onlyDigits(r.number).slice(0,3), priceMain:Number(r.priceMain||0), reverse:r.reverse }))
           .filter(x=>x.number && x.priceMain>0);
 
         const top3WithReverse = top3Raw.flatMap(p=>{
@@ -171,13 +153,13 @@ export default function OrderPage(){
         });
 
         // TOD3 (ราคาโต๊ด) — ไม่กลับเลข
-        const tod3Items = normalized
-          .map(n=>({ number:n.number, priceMain:n.tod }))
-          .filter(x=>x.number && x.priceMain>0);
+        const tod3Items =
+          rows
+            .map(r=>({ number:onlyDigits(r.number).slice(0,3), priceMain:Number(r.priceTod||0) }))
+            .filter(x=>x.number && x.priceMain>0);
 
         if(top3WithReverse.length===0 && tod3Items.length===0){
-          showBanner('info','ไม่มีรายการที่จะบันทึก');
-          return;
+          showBanner('info','ไม่มีรายการที่จะบันทึก'); return;
         }
 
         if(top3WithReverse.length>0){
@@ -206,8 +188,8 @@ export default function OrderPage(){
         }
       }else{
         // หมวดอื่น ๆ ส่งตามหมวดที่เลือก (รองรับกลับเลขสำหรับ 2 ตัวบน/ล่าง)
-        const base = normalized
-          .map(n=>({ number:n.number, priceMain:n.main, reverse:n.reverse }))
+        const base = rows
+          .map(r=>({ number:onlyDigits(r.number).slice(0,numLen), priceMain:Number(r.priceMain||0), reverse:r.reverse }))
           .filter(x=>x.number && x.priceMain>0);
 
         const expanded = allowReverse
@@ -218,10 +200,7 @@ export default function OrderPage(){
             })
           : base;
 
-        if(expanded.length===0){
-          showBanner('info','ไม่มีรายการที่จะบันทึก');
-          return;
-        }
+        if(expanded.length===0){ showBanner('info','ไม่มีรายการที่จะบันทึก'); return; }
 
         const r = await fetch('/api/orders',{
           method:'POST',
@@ -238,13 +217,14 @@ export default function OrderPage(){
       // ✅ บันทึกสำเร็จ: รีเซ็ตตาราง และโฟกัสช่องเลขแถวแรก
       showBanner('success','บันทึกเรียบร้อย');
       setRows(emptyRows(category));
+      // โฟกัสต้องรอให้ DOM อัปเดตก่อนหนึ่งเฟรม
       setTimeout(()=>{ firstNumberInputRef.current?.focus(); }, 0);
     }catch(err:any){
       showBanner('error', err?.message || 'เกิดข้อผิดพลาดระหว่างบันทึก');
     }
   }
 
-  const allowReverseForUI = allowReverse;
+  const allowReverse = category==='TOP3'||category==='TOP2'||category==='BOTTOM2';
 
   return (
     <div className={styles.container}>
@@ -269,11 +249,7 @@ export default function OrderPage(){
       <form onSubmit={onSubmit} className={styles.form}>
         <div className={styles.row}>
           <label className={styles.label}>หมวด</label>
-          <select
-            value={category}
-            onChange={e=>onCategoryChange(e.target.value as Category)}
-            className={styles.select}
-          >
+          <select value={category} onChange={e=>onCategoryChange(e.target.value as Category)} className={styles.select}>
             <option value="TOP3">3 ตัวบน</option>
             <option value="TOD3">3 โต๊ด</option>
             <option value="TOP2">2 ตัวบน</option>
@@ -291,7 +267,7 @@ export default function OrderPage(){
               <th>ตัวเลข</th>
               <th>ราคา {catLabel(category)}</th>
               {category==='TOP3' && <th>ราคา 3 โต๊ด</th>}
-              {allowReverseForUI && <th>กลับเลข</th>}
+              {allowReverse && <th>กลับเลข</th>}
             </tr>
           </thead>
           <tbody>
@@ -300,6 +276,7 @@ export default function OrderPage(){
                 <td className={styles.center}>{idx+1}</td>
                 <td>
                   <input
+                    // ⬇️ ผูก ref เฉพาะช่องเลขแถวแรก
                     ref={idx===0 ? firstNumberInputRef : undefined}
                     className={styles.input}
                     value={r.number}
@@ -332,7 +309,7 @@ export default function OrderPage(){
                   </td>
                 )}
 
-                {allowReverseForUI && (
+                {allowReverse && (
                   <td className={styles.center}>
                     <input
                       type="checkbox"

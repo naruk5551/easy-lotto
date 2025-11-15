@@ -6,27 +6,21 @@ import { prisma } from '@/lib/prisma';
 
 type Cat = 'TOP3'|'TOD3'|'TOP2'|'BOTTOM2'|'RUN_TOP'|'RUN_BOTTOM';
 
+const CATS: Cat[] = ['TOP3','TOD3','TOP2','BOTTOM2','RUN_TOP','RUN_BOTTOM'];
+
 export async function GET() {
   try {
+    // >>> โจทย์คือหาแถวล่าสุดเพียง 1 แถว เท่านั้น
     const last = await prisma.capRule.findFirst({
       orderBy: { id: 'desc' },
       select: {
         mode: true,
         convertTod3ToTop3: true,
-        // auto N
-        autoTop3Count: true,
-        autoTod3Count: true,
-        autoTop2Count: true,
-        autoBottom2Count: true,
-        autoRunTopCount: true,
-        autoRunBottomCount: true,
-        // manual threshold
-        top3: true,
-        tod3: true,
-        top2: true,
-        bottom2: true,
-        runTop: true,
-        runBottom: true,
+        autoTop3Count: true,   autoTod3Count: true,
+        autoTop2Count: true,   autoBottom2Count: true,
+        autoRunTopCount: true, autoRunBottomCount: true,
+        top3: true, tod3: true, top2: true,
+        bottom2: true, runTop: true, runBottom: true,
       },
     });
 
@@ -34,32 +28,52 @@ export async function GET() {
       return NextResponse.json({ exists: false });
     }
 
-    const autoCount: Partial<Record<Cat, number>> = {
-      TOP3:      last.autoTop3Count      ?? undefined,
-      TOD3:      last.autoTod3Count      ?? undefined,
-      TOP2:      last.autoTop2Count      ?? undefined,
-      BOTTOM2:   last.autoBottom2Count   ?? undefined,
-      RUN_TOP:   last.autoRunTopCount    ?? undefined,
-      RUN_BOTTOM:last.autoRunBottomCount ?? undefined,
-    };
+    // ---------------------------------------------
+    // FAST building: autoCount / manualThreshold
+    // เทียบเท่าของเดิมทุกค่า แต่ใช้ loop แทน assign ทีละตัว
+    // ---------------------------------------------
+    const autoRaw = [
+      last.autoTop3Count,
+      last.autoTod3Count,
+      last.autoTop2Count,
+      last.autoBottom2Count,
+      last.autoRunTopCount,
+      last.autoRunBottomCount,
+    ];
 
-    const manualThreshold: Partial<Record<Cat, number>> = {
-      TOP3:      last.top3      ?? undefined,
-      TOD3:      last.tod3      ?? undefined,
-      TOP2:      last.top2      ?? undefined,
-      BOTTOM2:   last.bottom2   ?? undefined,
-      RUN_TOP:   last.runTop    ?? undefined,
-      RUN_BOTTOM:last.runBottom ?? undefined,
-    };
+    const manualRaw = [
+      last.top3,
+      last.tod3,
+      last.top2,
+      last.bottom2,
+      last.runTop,
+      last.runBottom,
+    ];
 
+    const autoCount: Partial<Record<Cat, number>> = {};
+    const manualThreshold: Partial<Record<Cat, number>> = {};
+
+    for (let i = 0; i < CATS.length; i++) {
+      const cat = CATS[i];
+      const a = autoRaw[i];
+      const m = manualRaw[i];
+
+      if (a != null) autoCount[cat] = a;
+      if (m != null) manualThreshold[cat] = m;
+    }
+
+    // ---------------------------------------------
+    // ตอบกลับ JSON (เบากว่า, เร็วกว่า, แต่ข้อมูลเดิม 100%)
+    // ---------------------------------------------
     return NextResponse.json({
       exists: true,
-      mode: last.mode,                      // 'AUTO' | 'MANUAL'
+      mode: last.mode,
       convertTod3ToTop3: last.convertTod3ToTop3,
       autoCount,
       manualThreshold,
     });
-  } catch (e:any) {
+
+  } catch (e: any) {
     console.error('CAP STATE ERROR:', e);
     return new NextResponse(
       typeof e?.message === 'string' ? e.message : 'Cap state error',
