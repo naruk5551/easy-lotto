@@ -24,8 +24,10 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const page = Math.max(1, Number(searchParams.get('page') || '1'));
-    const pageSize = Math.max(1, Math.min(5000, Number(searchParams.get('pageSize') ?? 2000)));
-
+    const pageSize = Math.max(
+      1,
+      Math.min(100, Number(searchParams.get('pageSize') || '10')),
+    );
     const offset = (page - 1) * pageSize;
 
     const from = parseLocalishToUTC(searchParams.get('from'));

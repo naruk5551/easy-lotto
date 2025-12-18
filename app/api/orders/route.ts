@@ -32,6 +32,34 @@ function requiredLength(cat: PrismaCategory) {
   return 1; // RUN_TOP | RUN_BOTTOM
 }
 
+/** ลอยแพ: สร้างเลข 3 ตัวบนจากเลข 4-5 หลัก (unique permutations ความยาว 3) */
+function generateTop3FromLoypae(input: string): string[] {
+  const raw = onlyDigits(input);
+  const chars = raw.split('').sort();
+  const used = Array(chars.length).fill(false);
+  const path: string[] = [];
+  const out: string[] = [];
+
+  const bt = () => {
+    if (path.length === 3) {
+      out.push(path.join(''));
+      return;
+    }
+    for (let i = 0; i < chars.length; i++) {
+      if (used[i]) continue;
+      if (i > 0 && chars[i] === chars[i - 1] && !used[i - 1]) continue;
+      used[i] = true;
+      path.push(chars[i]);
+      bt();
+      path.pop();
+      used[i] = false;
+    }
+  };
+
+  bt();
+  return out;
+}
+
 function catTH(cat: PrismaCategory) {
   switch (cat) {
     case 'TOP3': return '3 ตัวบน';
@@ -124,47 +152,81 @@ export async function POST(req: Request) {
       return new NextResponse('ไม่มีรายการ', { status: 400 });
     }
 
-    const prismaCategory = toPrismaCategory(category);
-    const expectLen = requiredLength(prismaCategory);
-
-    // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก” + normalize ให้เสร็จก่อนแตะ DB
+    // 3) ตรวจความถูกต้อง + normalize ให้เสร็จก่อนแตะ DB
+    //    - หมวดปกติ: บังคับหมวดตามจำนวนหลัก
+    //    - หมวด LOYPAE (ลอยแพ): รับเลข 4-5 หลัก + งบรวม แล้วแปลงเป็น 3 ตัวบน (price = ceil(งบ/จำนวนแบบ))
+    let prismaCategory: PrismaCategory;
+    let expectLen: number;
     const normalized: { number: string; price: number; sumAmount: number }[] = [];
     const numbersSet = new Set<string>();
 
-    for (let idx = 0; idx < items.length; idx++) {
-      const it = items[idx];
+    if (category === 'LOYPAE') {
+      prismaCategory = 'TOP3';
+      expectLen = 3;
 
-      const number = onlyDigits(String(it.number));
-      const priceMain = Number(it.priceMain ?? 0);
-      const priceTod = Number(it.priceTod ?? 0);
-      const price = priceMain > 0 ? priceMain : priceTod; // ใช้ main ก่อน ถ้าไม่มีก็ใช้ tod
-      const sumAmount = (priceMain || 0) + (priceTod || 0);
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
+        const raw = onlyDigits(String(it.number));
+        const budget = Number(it.priceMain ?? 0);
 
-      if (!number) {
-        throw new Error(`แถวที่ ${idx + 1}: ไม่ได้กรอกเลข`);
-      }
-      if (number.length !== expectLen) {
-        const hint =
-          number.length === 3
-            ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”'
-            : number.length === 2
-              ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
-              : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
-        throw new Error(
-          `แถวที่ ${idx + 1}: หมวด ${catTH(
-            prismaCategory,
-          )} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`,
-        );
-      }
-      if (
-        !(Number.isFinite(price) && price > 0) ||
-        !(Number.isFinite(sumAmount) && sumAmount > 0)
-      ) {
-        throw new Error(`แถวที่ ${idx + 1}: ราคาไม่ถูกต้อง`);
-      }
+        if (!raw) throw new Error(`แถวที่ ${idx + 1}: ไม่ได้กรอกเลข`);
+        if (!(raw.length === 4 || raw.length === 5)) {
+          throw new Error(`แถวที่ ${idx + 1}: ลอยแพ ต้องเป็นเลข 4-5 หลัก (คุณกรอก ${raw.length})`);
+        }
+        if (!(Number.isFinite(budget) && budget > 0)) {
+          throw new Error(`แถวที่ ${idx + 1}: งบลอยแพไม่ถูกต้อง`);
+        }
 
-      normalized.push({ number, price, sumAmount });
-      numbersSet.add(number);
+        const perms3 = generateTop3FromLoypae(raw);
+        if (!perms3.length) {
+          throw new Error(`แถวที่ ${idx + 1}: ไม่สามารถสร้างเลข 3 ตัวบนจาก ${raw}`);
+        }
+        const perPrice = Math.ceil(budget / perms3.length);
+
+        for (const n of perms3) {
+          normalized.push({ number: n, price: perPrice, sumAmount: perPrice });
+          numbersSet.add(n);
+        }
+      }
+    } else {
+      prismaCategory = toPrismaCategory(category);
+      expectLen = requiredLength(prismaCategory);
+
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
+
+        const number = onlyDigits(String(it.number));
+        const priceMain = Number(it.priceMain ?? 0);
+        const priceTod = Number(it.priceTod ?? 0);
+        const price = priceMain > 0 ? priceMain : priceTod; // ใช้ main ก่อน ถ้าไม่มีก็ใช้ tod
+        const sumAmount = (priceMain || 0) + (priceTod || 0);
+
+        if (!number) {
+          throw new Error(`แถวที่ ${idx + 1}: ไม่ได้กรอกเลข`);
+        }
+        if (number.length !== expectLen) {
+          const hint =
+            number.length === 3
+              ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”'
+              : number.length === 2
+                ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
+                : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
+          throw new Error(
+            `แถวที่ ${idx + 1}: หมวด ${catTH(
+              prismaCategory,
+            )} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`,
+          );
+        }
+        if (
+          !(Number.isFinite(price) && price > 0) ||
+          !(Number.isFinite(sumAmount) && sumAmount > 0)
+        ) {
+          throw new Error(`แถวที่ ${idx + 1}: ราคาไม่ถูกต้อง`);
+        }
+
+        normalized.push({ number, price, sumAmount });
+        numbersSet.add(number);
+      }
     }
 
     if (!normalized.length) {

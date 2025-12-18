@@ -5,22 +5,32 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
 type Cat = 'TOP3'|'TOD3'|'TOP2'|'BOTTOM2'|'RUN_TOP'|'RUN_BOTTOM';
-
 const CATS: Cat[] = ['TOP3','TOD3','TOP2','BOTTOM2','RUN_TOP','RUN_BOTTOM'];
 
 export async function GET() {
   try {
-    // >>> โจทย์คือหาแถวล่าสุดเพียง 1 แถว เท่านั้น
+    // >>> เอาแถวล่าสุดแถวเดียว
     const last = await prisma.capRule.findFirst({
       orderBy: { id: 'desc' },
       select: {
         mode: true,
         convertTod3ToTop3: true,
-        autoTop3Count: true,   autoTod3Count: true,
-        autoTop2Count: true,   autoBottom2Count: true,
-        autoRunTopCount: true, autoRunBottomCount: true,
-        top3: true, tod3: true, top2: true,
-        bottom2: true, runTop: true, runBottom: true,
+
+        // AUTO (เก็บในช่องเดิม แต่ตีความเป็น % ส่วนลด)
+        autoTop3Count: true,
+        autoTod3Count: true,
+        autoTop2Count: true,
+        autoBottom2Count: true,
+        autoRunTopCount: true,
+        autoRunBottomCount: true,
+
+        // MANUAL
+        top3: true,
+        tod3: true,
+        top2: true,
+        bottom2: true,
+        runTop: true,
+        runBottom: true,
       },
     });
 
@@ -29,10 +39,10 @@ export async function GET() {
     }
 
     // ---------------------------------------------
-    // FAST building: autoCount / manualThreshold
-    // เทียบเท่าของเดิมทุกค่า แต่ใช้ loop แทน assign ทีละตัว
+    // AUTO → autoDiscountPct  (สำคัญ)
     // ---------------------------------------------
-    const autoRaw = [
+    const autoDiscountPct: Partial<Record<Cat, number>> = {};
+    const autoVals = [
       last.autoTop3Count,
       last.autoTod3Count,
       last.autoTop2Count,
@@ -41,7 +51,16 @@ export async function GET() {
       last.autoRunBottomCount,
     ];
 
-    const manualRaw = [
+    for (let i = 0; i < CATS.length; i++) {
+      const v = autoVals[i];
+      if (v != null) autoDiscountPct[CATS[i]] = v;
+    }
+
+    // ---------------------------------------------
+    // MANUAL (เหมือนเดิม 100%)
+    // ---------------------------------------------
+    const manualThreshold: Partial<Record<Cat, number>> = {};
+    const manualVals = [
       last.top3,
       last.tod3,
       last.top2,
@@ -50,26 +69,20 @@ export async function GET() {
       last.runBottom,
     ];
 
-    const autoCount: Partial<Record<Cat, number>> = {};
-    const manualThreshold: Partial<Record<Cat, number>> = {};
-
     for (let i = 0; i < CATS.length; i++) {
-      const cat = CATS[i];
-      const a = autoRaw[i];
-      const m = manualRaw[i];
-
-      if (a != null) autoCount[cat] = a;
-      if (m != null) manualThreshold[cat] = m;
+      const v = manualVals[i];
+      if (v != null) manualThreshold[CATS[i]] = v;
     }
 
-    // ---------------------------------------------
-    // ตอบกลับ JSON (เบากว่า, เร็วกว่า, แต่ข้อมูลเดิม 100%)
-    // ---------------------------------------------
     return NextResponse.json({
       exists: true,
       mode: last.mode,
-      convertTod3ToTop3: last.convertTod3ToTop3,
-      autoCount,
+      convertTod3ToTop3: !!last.convertTod3ToTop3,
+
+      // ✅ ชื่อใหม่ให้ตรงกับ preview / save
+      autoDiscountPct,
+
+      // ✅ manual ไม่เปลี่ยน
       manualThreshold,
     });
 

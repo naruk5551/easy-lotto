@@ -118,12 +118,13 @@ export async function GET(req: Request) {
     }
 
     // query
-    const page = Math.max(1, parseIntQ(url.searchParams.get('page'), 1));
-    const pageSize = Math.min(
-      200,
-      Math.max(1, parseIntQ(url.searchParams.get('pageSize'), 10)),
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1));
+    const pageSize = Math.max(
+      1,
+      Number(url.searchParams.get('pageSize') ?? 2000)
     );
     const skip = (page - 1) * pageSize;
+
 
     const from = parseDateQ(url.searchParams.get('from'));
     const to = parseDateQ(url.searchParams.get('to'));
@@ -217,8 +218,8 @@ export async function GET(req: Request) {
           (ownOnly
             ? true
             : meId != null
-            ? r.order?.userId === meId
-            : false),
+              ? r.order?.userId === meId
+              : false),
         locked,
       };
     });

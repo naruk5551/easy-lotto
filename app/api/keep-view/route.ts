@@ -22,7 +22,7 @@ function parseDateUTC(v?: string | null): Date | undefined {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const page = Math.max(1, Number(searchParams.get('page') ?? 1));
-  const pageSize = Math.min(200, Math.max(1, Number(searchParams.get('pageSize') ?? 10)));
+  const pageSize = Math.max(1, Math.min(5000, Number(searchParams.get('pageSize') ?? 2000)));
   const offset = (page - 1) * pageSize;
 
   const tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });

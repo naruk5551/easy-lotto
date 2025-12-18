@@ -101,17 +101,22 @@ export async function POST(req: Request) {
     }
 
     // 2) รับค่าจาก client
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return new NextResponse('invalid json', { status: 400 });
+    }
+
     const { category, items } = body as {
       category: string;
       items: Array<{ number: string; priceMain?: number; priceTod?: number }>;
-      // userId?: number;  // 👈 ไม่ใช้แล้ว อ่านจาก cookie/header แทน
     };
 
     // ใช้ userId จาก header / cookie แทนค่าที่ client ส่งมา
     const userId = getMeId(req);
     if (!userId) {
-      return new NextResponse('ไม่พบ user ที่ล็อกอิน (missing x-user-id)', { status: 401 });
+      return new NextResponse('ไม่พบ user ที่ล็อกอิน (missing x-user-id)', {
+        status: 401,
+      });
     }
 
     if (!category) return new NextResponse('กรุณาระบุหมวด', { status: 400 });
@@ -122,8 +127,13 @@ export async function POST(req: Request) {
     const prismaCategory = toPrismaCategory(category);
     const expectLen = requiredLength(prismaCategory);
 
-    // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก”
-    const normalized = items.map((it, idx) => {
+    // 3) ตรวจความถูกต้อง “บังคับหมวดตามจำนวนหลัก” + normalize ให้เสร็จก่อนแตะ DB
+    const normalized: { number: string; price: number; sumAmount: number }[] = [];
+    const numbersSet = new Set<string>();
+
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+
       const number = onlyDigits(String(it.number));
       const priceMain = Number(it.priceMain ?? 0);
       const priceTod = Number(it.priceTod ?? 0);
@@ -135,77 +145,112 @@ export async function POST(req: Request) {
       }
       if (number.length !== expectLen) {
         const hint =
-          number.length === 3 ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”' :
-          number.length === 2 ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”' :
-          'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
+          number.length === 3
+            ? 'ควรเลือก “3 ตัวบน” หรือ “3 โต๊ด”'
+            : number.length === 2
+              ? 'ควรเลือก “2 ตัวบน” หรือ “2 ตัวล่าง”'
+              : 'ควรเลือก “วิ่งบน” หรือ “วิ่งล่าง”';
         throw new Error(
-          `แถวที่ ${idx + 1}: หมวด ${catTH(prismaCategory)} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`
+          `แถวที่ ${idx + 1}: หมวด ${catTH(
+            prismaCategory,
+          )} ต้องเป็นเลข ${expectLen} หลัก (คุณกรอก ${number.length}) — ${hint}`,
         );
       }
-      if (!(Number.isFinite(price) && price > 0) || !(Number.isFinite(sumAmount) && sumAmount > 0)) {
+      if (
+        !(Number.isFinite(price) && price > 0) ||
+        !(Number.isFinite(sumAmount) && sumAmount > 0)
+      ) {
         throw new Error(`แถวที่ ${idx + 1}: ราคาไม่ถูกต้อง`);
       }
 
-      return { number, price, sumAmount };
-    });
-
-    // 4) เตรียม/สร้าง Product ตามหมวดหมู่ที่ถูกต้อง
-    const numbers = Array.from(new Set(normalized.map((x) => x.number)));
-
-    const existing: { id: number; number: string }[] = await withPrismaRetry(() =>
-      prisma.product.findMany({
-        where: { category: prismaCategory, number: { in: numbers } },
-        select: { id: true, number: true },
-      })
-    );
-    const existMap = new Map(existing.map((p) => [p.number, p.id]));
-
-    const missing = numbers.filter((n) => !existMap.has(n));
-    if (missing.length) {
-      await withPrismaRetry(() =>
-        prisma.product.createMany({
-          data: missing.map((n) => ({ category: prismaCategory, number: n })),
-          skipDuplicates: true,
-        })
-      );
+      normalized.push({ number, price, sumAmount });
+      numbersSet.add(number);
     }
 
-    // ดึง id อีกรอบให้ครบ
-    const all: { id: number; number: string }[] = await withPrismaRetry(() =>
-      prisma.product.findMany({
-        where: { category: prismaCategory, number: { in: numbers } },
-        select: { id: true, number: true },
-      })
-    );
-    const idMap = new Map(all.map((p) => [p.number, p.id]));
+    if (!normalized.length) {
+      return NextResponse.json({ ok: true, orderId: null });
+    }
 
-    // 5) บันทึก Order + Items
-    const order: { id: number } = await withPrismaRetry(() =>
-      prisma.order.create({
-        data: {
-          createdAt: new Date(), // UTC
-          user: { connect: { id: userId } },   // 👈 ใช้ userId จาก cookie/header
-          items: {
-            create: normalized.map((it) => {
-              const productId = idMap.get(it.number);
-              if (!productId) throw new Error(`ไม่พบสินค้าเลข ${it.number}`);
-              return {
-                price: it.price,
-                sumAmount: it.sumAmount,
-                product: { connect: { id: productId } },
-              };
-            }),
+    const numbers = Array.from(numbersSet);
+
+    // 4) ทำงานกับ DB ทั้งหมดใน transaction เดียว (product + order + orderItem)
+    const result = await withPrismaRetry(() =>
+      prisma.$transaction(async (tx) => {
+        // 🚀 4.1 สร้าง Product ที่จำเป็นทั้งหมดแบบ bulk ทีเดียว
+        //    แล้วปล่อยให้ unique index + skipDuplicates จัดการเลขที่มีอยู่แล้ว
+        await tx.product.createMany({
+          data: numbers.map((n) => ({
+            category: prismaCategory,
+            number: n,
+          })),
+          skipDuplicates: true,
+        });
+
+        // 4.2 ดึง product ที่เกี่ยวข้องทั้งหมดแค่ครั้งเดียว
+        const allProducts = await tx.product.findMany({
+          where: { category: prismaCategory, number: { in: numbers } },
+          select: { id: true, number: true },
+        });
+
+        const idMap = new Map(allProducts.map((p) => [p.number, p.id]));
+
+        // safety: ทุกเลขต้องมี productId
+        const orderItemsData = normalized.map((it) => {
+          const productId = idMap.get(it.number);
+          if (!productId) {
+            throw new Error(`ไม่พบสินค้าเลข ${it.number}`);
+          }
+          return {
+            orderId: 0, // จะใส่จริงหลังสร้าง order แล้ว
+            productId,
+            price: it.price,
+            sumAmount: it.sumAmount,
+          };
+        });
+
+        // 4.3 สร้าง Order แค่ 1 แถว
+        const order = await tx.order.create({
+          data: {
+            createdAt: new Date(), // UTC เหมือนเดิม
+            userId,
           },
-        },
-        include: { items: true },
-      })
+          select: { id: true },
+        });
+
+        // 4.4 เติม orderId แล้วยิง createMany ครั้งเดียว
+        const rowsWithOrder = orderItemsData.map((row) => ({
+          ...row,
+          orderId: order.id,
+        }));
+
+        if (rowsWithOrder.length) {
+          await tx.orderItem.createMany({
+            data: rowsWithOrder,
+          });
+        }
+
+        return { orderId: order.id };
+      }),
     );
 
-    return NextResponse.json({ ok: true, orderId: order.id });
+    const last = normalized[normalized.length - 1];
 
+    return NextResponse.json({
+      ok: true,
+      orderId: result.orderId,
+      lastItem: {
+        number: last.number,
+        price: last.price,
+        sumAmount: last.sumAmount,
+        category: prismaCategory,
+      },
+    });
   } catch (e: any) {
     console.error('❌ /api/orders error:', e);
-    const msg = typeof e?.message === 'string' && e.message ? e.message : 'เกิดข้อผิดพลาดระหว่างบันทึก';
+    const msg =
+      typeof e?.message === 'string' && e.message
+        ? e.message
+        : 'เกิดข้อผิดพลาดระหว่างบันทึก';
     return new NextResponse(msg, { status: 400 });
   }
 }

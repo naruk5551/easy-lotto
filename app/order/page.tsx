@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import styles from './order.module.css';
 
-type Category = 'TOP3'|'TOD3'|'TOP2'|'BOTTOM2'|'RUN_TOP'|'RUN_BOTTOM';
+type Category = 'TOP3'|'TOD3'|'TOP2'|'BOTTOM2'|'RUN_TOP'|'RUN_BOTTOM'|'LOYPAE';
 type Row = { number:string; priceMain:string; priceTod?:string; reverse:boolean; };
 type TW = { id:number; startAt:string; endAt:string; note?:string|null };
 
@@ -21,6 +21,7 @@ const onlyDigits = (s:string)=>s.replace(/\D+/g,'');
 function requiredLength(cat:Category){
   if(cat==='TOP3'||cat==='TOD3') return 3;
   if(cat==='TOP2'||cat==='BOTTOM2') return 2;
+  if(cat==='LOYPAE') return 5; // รับได้ 4-5 หลัก (จำกัด input สูงสุด 5)
   return 1; // RUN_TOP, RUN_BOTTOM
 }
 function catLabel(cat:Category){
@@ -31,6 +32,7 @@ function catLabel(cat:Category){
     case 'BOTTOM2': return '2 ตัวล่าง';
     case 'RUN_TOP': return 'วิ่งบน';
     case 'RUN_BOTTOM': return 'วิ่งล่าง';
+    case 'LOYPAE': return 'ลอยแพ';
   }
 }
 const thFormatter = new Intl.DateTimeFormat('th-TH', {
@@ -79,11 +81,17 @@ function buildLastSummary(
 ): string | null {
   const numLen = requiredLength(category);
   const isTop3 = category === 'TOP3';
+  const isLoypae = category === 'LOYPAE';
 
   for (let i = normalized.length - 1; i >= 0; i--) {
     const n = normalized[i];
     if (!n) continue;
-    if (!n.number || n.number.length !== numLen) continue;
+    if (!n.number) continue;
+    if (isLoypae) {
+      if (!(n.number.length === 4 || n.number.length === 5)) continue;
+    } else {
+      if (n.number.length !== numLen) continue;
+    }
 
     // TOP3: อาจมีทั้ง main + tod
     if (isTop3) {
@@ -148,6 +156,8 @@ export default function OrderPage(){
   const numLen = requiredLength(category);
   const showTod = category==='TOP3';
   const allowReverse = category==='TOP3'||category==='TOP2'||category==='BOTTOM2';
+  const numLenHint = category==='LOYPAE' ? '4-5' : String(numLen);
+  const priceLabel = category==='LOYPAE' ? 'งบลอยแพ' : `ราคา ${catLabel(category)}`;
 
   function onCategoryChange(cat:Category){
     setCategory(cat);
@@ -185,9 +195,16 @@ export default function OrderPage(){
 
       if(!r.number && !r.priceMain && !(showTod && r.priceTod)) continue;
 
-      if(n.number.length!==numLen){
-        showBanner('error',`แถวที่ ${i+1}: ต้องกรอกเลข ${numLen} หลัก — ${catLabel(category)}`);
-        return;
+      if(category==='LOYPAE'){
+        if(!(n.number.length===4 || n.number.length===5)){
+          showBanner('error',`แถวที่ ${i+1}: ต้องกรอกเลข 4-5 หลัก — ${catLabel(category)}`);
+          return;
+        }
+      }else{
+        if(n.number.length!==numLen){
+          showBanner('error',`แถวที่ ${i+1}: ต้องกรอกเลข ${numLen} หลัก — ${catLabel(category)}`);
+          return;
+        }
       }
       if(n.main<=0 && !(showTod && n.tod>0)){
         showBanner('error',`แถวที่ ${i+1}: กรุณากรอกราคา`);
@@ -201,7 +218,27 @@ export default function OrderPage(){
     showBanner('info','กำลังลงข้อมูล…');
 
     try{
-      if(category==='TOP3'){
+      if(category==='LOYPAE'){
+        const loypaeItems = normalized
+          .map(n=>({ number:n.number, priceMain:n.main }))
+          .filter(x=>x.number && (x.number.length===4 || x.number.length===5) && x.priceMain>0);
+
+        if(loypaeItems.length===0){
+          showBanner('info','ไม่มีรายการที่จะบันทึก');
+          return;
+        }
+
+        const r0 = await fetch('/api/orders',{
+          method:'POST',
+          headers:{'content-type':'application/json'},
+          body: JSON.stringify({
+            category: 'LOYPAE',
+            userId: 1,
+            items: loypaeItems.map(x=>({ number:x.number, priceMain:x.priceMain }))
+          })
+        });
+        if(!r0.ok) throw new Error(await r0.text());
+      } else if(category==='TOP3'){
         const top3Raw = normalized
           .map(n=>({ number:n.number, priceMain:n.main, reverse:n.reverse }))
           .filter(x=>x.number && x.priceMain>0);
@@ -320,8 +357,9 @@ export default function OrderPage(){
             <option value="BOTTOM2">2 ตัวล่าง</option>
             <option value="RUN_TOP">วิ่งบน</option>
             <option value="RUN_BOTTOM">วิ่งล่าง</option>
+            <option value="LOYPAE">ลอยแพ (สลับเป็น 3 ตัวบน)</option>
           </select>
-          <div className={styles.hint}>ต้องการ {numLen} หลัก — {catLabel(category)}</div>
+          <div className={styles.hint}>ต้องการ {numLenHint} หลัก — {catLabel(category)}</div>
         </div>
 
         <table className={styles.table}>
@@ -329,7 +367,7 @@ export default function OrderPage(){
             <tr>
               <th>#</th>
               <th>ตัวเลข</th>
-              <th>ราคา {catLabel(category)}</th>
+              <th>{priceLabel}</th>
               {category==='TOP3' && <th>ราคา 3 โต๊ด</th>}
               {allowReverseForUI && <th>กลับเลข</th>}
             </tr>

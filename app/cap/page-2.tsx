@@ -25,18 +25,13 @@ type PreviewResp = {
   thresholds: Partial<Record<Cat, number>>;
   topRanks: Partial<Record<Cat, PreviewRow[]>>;
   countNumbers?: Partial<Record<Cat, number>>;
-  payout?: Partial<Record<Cat, number>>;
-  autoDiscountPct?: Partial<Record<Cat, number>> | null;
 };
 
 type CapLatestResp = {
   hasCap: boolean;
   mode: 'MANUAL'|'AUTO';
   convertTod3ToTop3: boolean;
-
-  // ✅ AUTO: เปลี่ยนเป็นส่วนลด %
-  autoDiscountPct: Partial<Record<Cat, number>>;
-
+  autoCount: Partial<Record<Cat, number>>;
   manualThreshold: Partial<Record<Cat, number>>;
 };
 
@@ -67,16 +62,6 @@ function thaiLocalInputToUtcIso(v: string): string {
   return new Date(ms).toISOString();
 }
 
-// ✅ จำนวน Top-N ที่ “แสดงเพื่อดู” (ไม่เกี่ยวกับสูตร)
-const TOPN_SHOW: Record<Cat, number> = {
-  TOP3: 30,
-  TOD3: 30,
-  TOP2: 10,
-  BOTTOM2: 10,
-  RUN_TOP: 5,
-  RUN_BOTTOM: 5,
-};
-
 export default function CapPage(){
   // ===== meta TW =====
   const [windows, setWindows] = useState<TW[]>([]);
@@ -91,9 +76,14 @@ export default function CapPage(){
   const [mode, setMode] = useState<'MANUAL'|'AUTO'>('AUTO');
   const [convertTod3ToTop3, setConvert] = useState<boolean>(false);
 
-  // ✅ AUTO: ส่วนลด % ต่อหมวด
-  const [autoDiscountPct, setAutoDiscountPct] = useState<Partial<Record<Cat, number>>>({
-    TOP3:30, TOD3:20, TOP2:20, BOTTOM2:20, RUN_TOP:15, RUN_BOTTOM:15
+  // AUTO: ส่วนลด (%) N ต่อหมวด
+  const [autoCount, setAutoCount] = useState<Partial<Record<Cat, number>>>({
+    TOP3: 30,
+    TOD3: 20,
+    TOP2: 20,
+    BOTTOM2: 20,
+    RUN_TOP: 15,
+    RUN_BOTTOM: 15,
   });
 
   // MANUAL: threshold ต่อหมวด
@@ -108,6 +98,7 @@ export default function CapPage(){
   const [expanded, setExpanded] = useState<Record<Cat, boolean>>({
     TOP3:false, TOD3:false, TOP2:false, BOTTOM2:false, RUN_TOP:false, RUN_BOTTOM:false
   });
+  const DEFAULT_SHOW = 10;
 
   // auto preview ครั้งแรก
   const [autoPreviewDone, setAutoPreviewDone] = useState(false);
@@ -148,8 +139,8 @@ export default function CapPage(){
           setMode(cap.mode === 'MANUAL' ? 'MANUAL' : 'AUTO');
           setConvert(!!cap.convertTod3ToTop3);
 
-          if (cap.autoDiscountPct) {
-            setAutoDiscountPct(prev => ({ ...prev, ...cap.autoDiscountPct }));
+          if (cap.autoCount) {
+            setAutoCount(prev => ({ ...prev, ...cap.autoCount }));
           }
           if (cap.manualThreshold) {
             setManualThreshold(cap.manualThreshold);
@@ -177,11 +168,11 @@ export default function CapPage(){
   const fromUTC = useMemo(()=>fromTH? thaiLocalInputToUtcIso(fromTH):'', [fromTH]);
   const toUTC   = useMemo(()=>toTH? thaiLocalInputToUtcIso(toTH):'',   [toTH]);
 
-  // auto-preview ครั้งแรก
+  // auto-preview ครั้งแรก ใช้ config จาก CapRule ล่าสุด
   useEffect(() => {
     if (autoPreviewDone) return;
     if (!fromUTC || !toUTC) return;
-    if (!initialCapLoaded) return;
+    if (!initialCapLoaded) return;   // รอโหลด capRule ให้ครบก่อน
     (async () => {
       await onPreviewOnly();
       setAutoPreviewDone(true);
@@ -199,7 +190,7 @@ export default function CapPage(){
         convertTod3ToTop3,
         from: fromUTC,
         to: toUTC,
-        autoDiscountPct,
+        autoCount,
         manualThreshold
       })
     });
@@ -228,9 +219,7 @@ export default function CapPage(){
   function numInput(
     v:number|undefined,
     onChange:(n:number|undefined)=>void,
-    placeholder?:string,
-    min?:number,
-    max?:number
+    placeholder?:string
   ){
     return (
       <input
@@ -246,15 +235,13 @@ export default function CapPage(){
           }
         }}
         placeholder={placeholder||''}
-        min={min}
-        max={max}
+        min={0}
       />
     );
   }
 
   function ToggleBtn({cat, total}:{cat:Cat; total:number}) {
-    const defaultShow = TOPN_SHOW[cat] ?? 10;
-    if (total <= defaultShow) return null;
+    if (total <= DEFAULT_SHOW) return null;
     const isOpen = expanded[cat];
     return (
       <button
@@ -316,26 +303,14 @@ export default function CapPage(){
           </label>
         </div>
 
-        {/* ✅ AUTO: ส่วนลด (%) ต่อหมวด */}
         {mode==='AUTO' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {CATS.map(c=>(
               <div key={c} className="flex items-center justify-between rounded border p-2">
-                <div className="space-y-0.5">
-                  <div>{CAT_TH[c]}</div>
-                  <div className="text-xs text-gray-500">
-                    Top-N แสดงเพื่อดู: {TOPN_SHOW[c]}
-                  </div>
-                </div>
+                <div>{CAT_TH[c]}</div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600">ส่วนลด %</span>
-                  {numInput(
-                    autoDiscountPct[c],
-                    n=>setAutoDiscountPct(s=>({...s,[c]: n})),
-                    'เช่น 30',
-                    0,
-                    100
-                  )}
+                  <span className="text-sm text-gray-600">ส่วนลด (%) N</span>
+                  {numInput(autoCount[c], n=>setAutoCount(s=>({...s,[c]: n})), 'เช่น 30')}
                 </div>
               </div>
             ))}
@@ -349,7 +324,7 @@ export default function CapPage(){
                 <div>{CAT_TH[c]}</div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-600">Threshold</span>
-                  {numInput(manualThreshold[c], n=>setManualThreshold(s=>({...s,[c]: n})), 'บาท', 0)}
+                  {numInput(manualThreshold[c], n=>setManualThreshold(s=>({...s,[c]: n})), 'บาท')}
                 </div>
               </div>
             ))}
@@ -397,26 +372,24 @@ export default function CapPage(){
                 <thead className="bg-gray-100">
                   <tr>
                     <th className="border px-2 py-1 text-left">หมวด</th>
-                    <th className="border px-2 py-1 text-right">Threshold (บาท/เลข)</th>
+                    <th className="border px-2 py-1 text-right">Threshold (บาท)</th>
                     <th className="border px-2 py-1 text-right">จำนวนเลขทั้งหมด</th>
-                    <th className="border px-2 py-1 text-left">Top-N (แสดงเพื่อดูเท่านั้น)</th>
+                    <th className="border px-2 py-1 text-left">ส่วนลด (%) N (จากมาก→น้อย)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {CATS.map((c)=>{
                     const th = preview.thresholds?.[c] ?? 0;
                     const rows = preview.topRanks?.[c] || [];
-                    const totalCount = preview.countNumbers?.[c] ?? 0;
-
-                    const defaultShow = TOPN_SHOW[c] ?? 10;
+                    const totalCount = preview.countNumbers?.[c] ?? rows.length;
                     const showAll = expanded[c];
-                    const list = showAll ? rows : rows.slice(0, defaultShow);
+                    const list = showAll ? rows : rows.slice(0, DEFAULT_SHOW);
 
                     return (
                       <tr key={c}>
                         <td className="border px-2 py-1">{CAT_TH[c]}</td>
                         <td className="border px-2 py-1 text-right">{(th||0).toLocaleString()}</td>
-                        <td className="border px-2 py-1 text-right">{Number(totalCount||0).toLocaleString()}</td>
+                        <td className="border px-2 py-1 text-right">{totalCount.toLocaleString()}</td>
                         <td className="border px-2 py-1">
                           {rows.length===0 ? (
                             <span className="text-gray-400">—</span>
