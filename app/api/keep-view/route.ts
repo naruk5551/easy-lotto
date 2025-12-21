@@ -4,31 +4,69 @@ export const runtime = 'nodejs';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
+type Category = (typeof CATEGORIES)[number];
+
+type CapMode = 'MANUAL' | 'AUTO';
+
 function parseDateUTC(v?: string | null): Date | undefined {
   if (!v) return undefined;
   const s = String(v).trim();
   if (!s) return undefined;
 
-  // มี Z หรือมี offset → parse ตรง
   if (/[zZ]|[+\-]\d{2}:\d{2}$/.test(s)) {
     const d = new Date(s);
     return isNaN(d.getTime()) ? undefined : d;
   }
 
-  // datetime-local (ไม่มี timezone) → ถือว่าเป็นเวลาไทย +07:00
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)) {
-    const d = new Date(`${s}+07:00`);
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
+  // NOTE: keep-view รับ query เป็น ISO Z อยู่แล้วจากหน้า (คุณส่ง ...Z)
   const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-const CATEGORIES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
-type Category = (typeof CATEGORIES)[number];
+type CapRow = {
+  mode: CapMode;
+  top3: number | null;
+  tod3: number | null;
+  top2: number | null;
+  bottom2: number | null;
+  runTop: number | null;
+  runBottom: number | null;
 
-// --------- helpers (เหมือน keep/settle) ----------
+  autoThresholdTop3: any | null;
+  autoThresholdTod3: any | null;
+  autoThresholdTop2: any | null;
+  autoThresholdBottom2: any | null;
+  autoThresholdRunTop: any | null;
+  autoThresholdRunBottom: any | null;
+
+  convertTod3ToTop3: boolean;
+};
+
+function capFor(cat: Category, cap: CapRow): number {
+  if (cap.mode === 'AUTO') {
+    const t = (v: any) => Number(v ?? 0);
+    switch (cat) {
+      case 'TOP3': return t(cap.autoThresholdTop3);
+      case 'TOD3': return t(cap.autoThresholdTod3);
+      case 'TOP2': return t(cap.autoThresholdTop2);
+      case 'BOTTOM2': return t(cap.autoThresholdBottom2);
+      case 'RUN_TOP': return t(cap.autoThresholdRunTop);
+      case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
+    }
+  } else {
+    const n = (v: number | null) => Number(v ?? 0);
+    switch (cat) {
+      case 'TOP3': return n(cap.top3);
+      case 'TOD3': return n(cap.tod3);
+      case 'TOP2': return n(cap.top2);
+      case 'BOTTOM2': return n(cap.bottom2);
+      case 'RUN_TOP': return n(cap.runTop);
+      case 'RUN_BOTTOM': return n(cap.runBottom);
+    }
+  }
+}
+
 function perms3(s: string) {
   if ((s ?? '').length !== 3) return [s];
   const a = s[0], b = s[1], c = s[2];
@@ -39,60 +77,23 @@ function perms3(s: string) {
   ]));
 }
 
-type CapMode = 'AUTO' | 'MANUAL';
-type CapRow = {
-  mode: CapMode;
-  top3: number | null; tod3: number | null; top2: number | null;
-  bottom2: number | null; runTop: number | null; runBottom: number | null;
-  autoThresholdTop3: any | null; autoThresholdTod3: any | null; autoThresholdTop2: any | null;
-  autoThresholdBottom2: any | null; autoThresholdRunTop: any | null; autoThresholdRunBottom: any | null;
-  convertTod3ToTop3: boolean;
-};
-
-function capFor(cat: Category, cap: CapRow): number {
-  if (cap.mode === 'AUTO') {
-    const t = (v: any) => Number(v ?? 0);
-    switch (cat) {
-      case 'TOP3':       return t(cap.autoThresholdTop3);
-      case 'TOD3':       return t(cap.autoThresholdTod3);
-      case 'TOP2':       return t(cap.autoThresholdTop2);
-      case 'BOTTOM2':    return t(cap.autoThresholdBottom2);
-      case 'RUN_TOP':    return t(cap.autoThresholdRunTop);
-      case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
-    }
-  } else {
-    const n = (v: number | null) => Number(v ?? 0);
-    switch (cat) {
-      case 'TOP3':       return n(cap.top3);
-      case 'TOD3':       return n(cap.tod3);
-      case 'TOP2':       return n(cap.top2);
-      case 'BOTTOM2':    return n(cap.bottom2);
-      case 'RUN_TOP':    return n(cap.runTop);
-      case 'RUN_BOTTOM': return n(cap.runBottom);
-    }
-  }
+function splitAmountExact(total: number, parts: number) {
+  const base = Math.floor(total / parts);
+  const rem = total - base * parts;
+  const out = new Array(parts).fill(base);
+  for (let i = 0; i < rem; i++) out[i] += 1;
+  return out;
 }
 
-const keyOf = (c: Category, n: string) => `${c}|${n}`;
-
-/**
- * ✅ FIX สำคัญ: keep-view ต้องคำนวณจาก "Order.createdAt" ไม่ใช้ AcceptSelf.createdAt
- * และเพื่อให้กรองช่วงย่อยได้ → ใช้ delta: accept(upto=to) - accept(upto=from)
- */
-async function computeAcceptedCumulative(params: {
-  startAt: Date;
-  upto: Date;
-  cap: CapRow;
-}): Promise<Map<string, number>> {
-  const { startAt, upto, cap } = params;
-
-  // inflow สะสมตั้งแต่ต้นงวด..upto  (ยึดแบบ A: o.createdAt)
-  const inflowsRaw = await prisma.$queryRaw<
-    { category: Category; number: string; inflow: number }[]
+// keep สะสมถึง upto (ใช้โค้ดเดียวกับ keep)
+async function computeKeepUpTo(startAt: Date, upto: Date, cap: CapRow) {
+  const inflow = await prisma.$queryRaw<
+    { category: Category; number: string; amount: number }[]
   >`
-    SELECT p.category AS "category",
-           p.number   AS "number",
-           COALESCE(SUM(oi."sumAmount"),0)::float AS "inflow"
+    SELECT
+      p.category AS "category",
+      p.number   AS "number",
+      COALESCE(SUM(oi."sumAmount"),0)::float AS "amount"
     FROM "OrderItem" oi
     JOIN "Order" o   ON oi."orderId" = o.id
     JOIN "Product" p ON oi."productId" = p.id
@@ -100,210 +101,188 @@ async function computeAcceptedCumulative(params: {
     GROUP BY p.category, p.number
   `;
 
-  const inflowBy = new Map<string, number>();
-  for (const r of inflowsRaw) {
-    const amt = Number(r.inflow ?? 0);
-    if (!Number.isFinite(amt) || amt <= 0) continue;
-    const k = keyOf(r.category, r.number);
-    inflowBy.set(k, (inflowBy.get(k) ?? 0) + amt);
-  }
+  const top3Direct = new Map<string, number>();
+  const tod3 = new Map<string, number>();
+  const others = new Map<string, number>();
 
-  const accepted = new Map<string, number>();
+  for (const r of inflow) {
+    const amt = Number(r.amount) || 0;
+    if (amt <= 0) continue;
 
-  const convert = !!cap.convertTod3ToTop3;
-  const capTop3 = capFor('TOP3', cap) ?? 0;
-
-  // keptPermTop3 = ยอดรับเองสะสมในเชิง "TOP3 ต่อ permutation"
-  const keptPermTop3 = new Map<string, number>();
-
-  // 1) TOP3 ตรง: รับเองได้ = min(inflow, capTop3) ต่อเลข
-  for (const [k, inflow] of inflowBy.entries()) {
-    const [cat, num] = k.split('|') as [Category, string];
-    if (cat !== 'TOP3') continue;
-
-    const keep = Math.min(inflow, capTop3);
-    if (keep > 0) {
-      accepted.set(k, keep);
-      keptPermTop3.set(num, (keptPermTop3.get(num) ?? 0) + keep);
+    if (r.category === 'TOP3') {
+      top3Direct.set(r.number, (top3Direct.get(r.number) || 0) + amt);
+      continue;
     }
-  }
-
-  // 2) หมวดอื่น ๆ (ยกเว้น TOD3 ตอน convert) → min(inflow, capหมวดนั้น)
-  for (const [k, inflow] of inflowBy.entries()) {
-    const [cat] = k.split('|') as [Category, string];
-    if (cat === 'TOP3') continue;
-    if (convert && cat === 'TOD3') continue;
-
-    const capAmt = capFor(cat, cap) ?? 0;
-    const keep = Math.min(inflow, capAmt);
-    if (keep > 0) accepted.set(k, keep);
-  }
-
-  // 3) TOD3 ตอน convert: “คุมอั้นด้วย cap TOP3” แต่ “แสดงเป็น TOD3”
-  if (convert) {
-    for (const [k, inflow] of inflowBy.entries()) {
-      const [cat, num] = k.split('|') as [Category, string];
-      if (cat !== 'TOD3') continue;
-
-      const list = perms3(num);
-      const perIn = Math.round(inflow / list.length); // ✅ ต้องเหมือน settle/keep
-
-      let addTotal = 0;
-      for (const nn of list) {
-        const alreadyPerm = keptPermTop3.get(nn) ?? 0;
-        const remaining = Math.max(capTop3 - alreadyPerm, 0);
-        const add = Math.min(perIn, remaining);
-        if (add > 0) {
-          addTotal += add;
-          keptPermTop3.set(nn, alreadyPerm + add);
-        }
-      }
-
-      if (addTotal > 0) {
-        accepted.set(k, addTotal); // ✅ เก็บเป็น TOD3 เพื่อแสดงเป็นโต๊ด
-      }
+    if (r.category === 'TOD3') {
+      tod3.set(r.number, (tod3.get(r.number) || 0) + amt);
+      continue;
     }
+    const k = `${r.category}|${r.number}`;
+    others.set(k, (others.get(k) || 0) + amt);
   }
 
-  return accepted;
+  const keepByKey = new Map<string, number>();
+
+  // other cats
+  for (const [k, amt] of others) {
+    const [cat] = k.split('|') as [Category];
+    keepByKey.set(k, Math.max(0, Math.min(amt, capFor(cat, cap))));
+  }
+
+  const capTop3 = capFor('TOP3', cap);
+
+  if (!cap.convertTod3ToTop3) {
+    for (const [n, amt] of top3Direct) keepByKey.set(`TOP3|${n}`, Math.max(0, Math.min(amt, capTop3)));
+    const capTod3 = capFor('TOD3', cap);
+    for (const [n, amt] of tod3) keepByKey.set(`TOD3|${n}`, Math.max(0, Math.min(amt, capTod3)));
+    return keepByKey;
+  }
+
+  // convert TOD3 -> TOP3 cap, but keep displayed under TOD3
+  const remainingCapByPerm = new Map<string, number>();
+  const allPerms = new Set<string>();
+  for (const n of top3Direct.keys()) allPerms.add(n);
+  for (const n of tod3.keys()) perms3(n).forEach(p => allPerms.add(p));
+  for (const p of allPerms) remainingCapByPerm.set(p, capTop3);
+
+  // TOP3 direct first
+  for (const [n, amt] of top3Direct) {
+    const rem = remainingCapByPerm.get(n) ?? capTop3;
+    const kept = Math.max(0, Math.min(amt, rem));
+    keepByKey.set(`TOP3|${n}`, kept);
+    remainingCapByPerm.set(n, rem - kept);
+  }
+
+  // TOD3 after (deterministic)
+  const todNumbers = [...tod3.keys()].sort();
+  for (const todNum of todNumbers) {
+    const total = tod3.get(todNum) || 0;
+    if (total <= 0) continue;
+
+    const permList = perms3(todNum).sort();
+    const splits = splitAmountExact(total, permList.length);
+
+    let todKeptSum = 0;
+    for (let i = 0; i < permList.length; i++) {
+      const perm = permList[i];
+      const part = splits[i];
+      const rem = remainingCapByPerm.get(perm) ?? capTop3;
+      const keptPart = Math.max(0, Math.min(part, rem));
+      todKeptSum += keptPart;
+      remainingCapByPerm.set(perm, rem - keptPart);
+    }
+
+    if (todKeptSum > 0) keepByKey.set(`TOD3|${todNum}`, todKeptSum);
+  }
+
+  return keepByKey;
 }
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-
-  const page = Math.max(1, Number(searchParams.get('page') ?? 1));
-  const pageSize = Math.max(1, Math.min(5000, Number(searchParams.get('pageSize') ?? 2000)));
-  const offset = (page - 1) * pageSize;
-
-  const tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
-  if (!tw) {
-    return NextResponse.json({ from: null, to: null, total: 0, items: [], page, pageSize });
-  }
-
-  const fromQ = parseDateUTC(searchParams.get('from'));
-  const toQ = parseDateUTC(searchParams.get('to'));
-
-  const from = fromQ ?? tw.startAt;
-  const to = toQ ?? tw.endAt;
-
-  // clamp ให้อยู่ในงวด
-  const startAt = tw.startAt;
-  const endAt = tw.endAt;
-  const _from = new Date(Math.max(startAt.getTime(), from.getTime()));
-  const _to = new Date(Math.min(endAt.getTime(), to.getTime()));
-
-  if (!(_from < _to)) {
-    return NextResponse.json({ from: _from, to: _to, total: 0, items: [], page, pageSize });
-  }
-
-  // ✅ ใช้ CapRule แถวล่าสุด (เหมือน settle)
-  const latestCap = await prisma.capRule.findFirst({
-    orderBy: { id: 'desc' },
-    select: {
-      mode: true,
-      top3: true, tod3: true, top2: true, bottom2: true, runTop: true, runBottom: true,
-      autoThresholdTop3: true, autoThresholdTod3: true, autoThresholdTop2: true,
-      autoThresholdBottom2: true, autoThresholdRunTop: true, autoThresholdRunBottom: true,
-      convertTod3ToTop3: true,
-    },
-  });
-
-  const cap: CapRow = latestCap ? {
-    mode: latestCap.mode,
-    top3: latestCap.top3, tod3: latestCap.tod3, top2: latestCap.top2,
-    bottom2: latestCap.bottom2, runTop: latestCap.runTop, runBottom: latestCap.runBottom,
-    autoThresholdTop3: latestCap.autoThresholdTop3, autoThresholdTod3: latestCap.autoThresholdTod3, autoThresholdTop2: latestCap.autoThresholdTop2,
-    autoThresholdBottom2: latestCap.autoThresholdBottom2, autoThresholdRunTop: latestCap.autoThresholdRunTop, autoThresholdRunBottom: latestCap.autoThresholdRunBottom,
-    convertTod3ToTop3: latestCap.convertTod3ToTop3,
-  } : {
-    mode: 'MANUAL',
-    top3: null, tod3: null, top2: null,
-    bottom2: null, runTop: null, runBottom: null,
-    autoThresholdTop3: null, autoThresholdTod3: null, autoThresholdTop2: null,
-    autoThresholdBottom2: null, autoThresholdRunTop: null, autoThresholdRunBottom: null,
-    convertTod3ToTop3: false,
-  };
-
-  // inflow เฉพาะช่วงย่อย (เอาไว้โชว์)
-  const inflowSliceRaw = await prisma.$queryRaw<
-    { category: Category; number: string; inflow: number }[]
-  >`
-    SELECT p.category AS "category",
-           p.number   AS "number",
-           COALESCE(SUM(oi."sumAmount"),0)::float AS "inflow"
+async function inflowRange(from: Date, to: Date) {
+  return prisma.$queryRaw<{ category: Category; number: string; amount: number }[]>`
+    SELECT
+      p.category AS "category",
+      p.number   AS "number",
+      COALESCE(SUM(oi."sumAmount"),0)::float AS "amount"
     FROM "OrderItem" oi
     JOIN "Order" o   ON oi."orderId" = o.id
     JOIN "Product" p ON oi."productId" = p.id
-    WHERE o."createdAt" >= ${_from} AND o."createdAt" < ${_to}
+    WHERE o."createdAt" >= ${from} AND o."createdAt" < ${to}
     GROUP BY p.category, p.number
   `;
+}
 
-  const inflowSliceByKey = new Map<string, number>();
-  for (const r of inflowSliceRaw) {
-    const amt = Number(r.inflow ?? 0);
-    if (!Number.isFinite(amt) || amt <= 0) continue;
-    inflowSliceByKey.set(keyOf(r.category, r.number), (inflowSliceByKey.get(keyOf(r.category, r.number)) ?? 0) + amt);
-  }
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
 
-  // ✅ FIX: keep delta = acceptCum(to) - acceptCum(from)
-  const acceptTo = await computeAcceptedCumulative({ startAt, upto: _to, cap });
-  const acceptFrom = await computeAcceptedCumulative({ startAt, upto: _from, cap });
+    const page = Math.max(1, Number(searchParams.get('page') ?? 1));
+    const pageSize = Math.max(1, Math.min(5000, Number(searchParams.get('pageSize') ?? 2000)));
+    const offset = (page - 1) * pageSize;
 
-  const keepDeltaByKey = new Map<string, number>();
-  for (const [k, vTo] of acceptTo.entries()) {
-    const vFrom = acceptFrom.get(k) ?? 0;
-    const d = Number(vTo) - Number(vFrom);
-    if (d > 0) keepDeltaByKey.set(k, d);
-  }
-
-  // union keys (มี inflow slice หรือมี keep delta)
-  const allKeys = new Set<string>([...inflowSliceByKey.keys(), ...keepDeltaByKey.keys()]);
-
-  const itemsAll: { category: Category; number: string; inflow: number; keep: number }[] = [];
-  for (const k of allKeys) {
-    const [cat, num] = k.split('|') as [Category, string];
-    const inflow = inflowSliceByKey.get(k) ?? 0;
-    const keep = keepDeltaByKey.get(k) ?? 0;
-    if (inflow <= 0 && keep <= 0) continue;
-    itemsAll.push({ category: cat, number: num, inflow, keep });
-  }
-
-  // จัดอันดับเหมือนเดิม: แยกหมวดแล้วเรียง keep มาก → เลข
-  const byCat = new Map<Category, { category: Category; number: string; inflow: number; keep: number }[]>();
-  for (const it of itemsAll) {
-    if (!byCat.has(it.category)) byCat.set(it.category, []);
-    byCat.get(it.category)!.push(it);
-  }
-  for (const [cat, arr] of byCat) {
-    arr.sort((a, b) => (b.keep - a.keep) || a.number.localeCompare(b.number));
-    byCat.set(cat, arr);
-  }
-
-  // สร้างลิสต์แบบ “ทุกหมวดเริ่มแถวแรก” (เหมือนเดิม)
-  const merged: typeof itemsAll = [];
-  let i = 0;
-  while (true) {
-    let pushed = false;
-    for (const cat of CATEGORIES) {
-      const arr = byCat.get(cat) ?? [];
-      if (i < arr.length) {
-        merged.push(arr[i]);
-        pushed = true;
-      }
+    const tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
+    if (!tw) {
+      return NextResponse.json({ from: null, to: null, total: 0, items: [], page, pageSize });
     }
-    if (!pushed) break;
-    i++;
+
+    const fromQ = parseDateUTC(searchParams.get('from'));
+    const toQ = parseDateUTC(searchParams.get('to'));
+    const from = fromQ ?? tw.startAt;
+    const to = toQ ?? tw.endAt;
+
+    // ✅ load latest capRule (เหมือน keep/settle)
+    const cap = await prisma.capRule.findFirst({
+      orderBy: { id: 'desc' },
+      select: {
+        mode: true,
+        top3: true, tod3: true, top2: true, bottom2: true, runTop: true, runBottom: true,
+        autoThresholdTop3: true, autoThresholdTod3: true, autoThresholdTop2: true,
+        autoThresholdBottom2: true, autoThresholdRunTop: true, autoThresholdRunBottom: true,
+        convertTod3ToTop3: true,
+      },
+    });
+
+    const capRow: CapRow = (cap ?? {
+      mode: 'MANUAL',
+      top3: 0, tod3: 0, top2: 0, bottom2: 0, runTop: 0, runBottom: 0,
+      autoThresholdTop3: 0, autoThresholdTod3: 0, autoThresholdTop2: 0,
+      autoThresholdBottom2: 0, autoThresholdRunTop: 0, autoThresholdRunBottom: 0,
+      convertTod3ToTop3: false,
+    }) as any;
+
+    // keepDelta = keepUpTo(to) - keepUpTo(from)
+    const keepTo = await computeKeepUpTo(tw.startAt, to, capRow);
+    const keepFrom = await computeKeepUpTo(tw.startAt, from, capRow);
+
+    const keepDeltaByKey = new Map<string, number>();
+    for (const [k, vTo] of keepTo) {
+      const vFrom = keepFrom.get(k) || 0;
+      const delta = (Number(vTo) || 0) - (Number(vFrom) || 0);
+      if (delta > 0) keepDeltaByKey.set(k, delta);
+    }
+
+    // inflow ของช่วง (เพื่อแสดงคู่กัน)
+    const inflow = await inflowRange(from, to);
+    const inflowByKey = new Map<string, number>();
+    for (const r of inflow) {
+      const k = `${r.category}|${r.number}`;
+      inflowByKey.set(k, (inflowByKey.get(k) || 0) + (Number(r.amount) || 0));
+    }
+
+    // สร้าง rows: เอา key ที่มี inflow หรือ keepDelta
+    const allKeys = new Set<string>([...inflowByKey.keys(), ...keepDeltaByKey.keys()]);
+    const allRows: { category: Category; number: string; inflow: number; keep: number }[] = [];
+
+    for (const k of allKeys) {
+      const [cat, number] = k.split('|') as [Category, string];
+      const infl = inflowByKey.get(k) || 0;
+      const keep = keepDeltaByKey.get(k) || 0;
+      if (!infl && !keep) continue;
+      allRows.push({ category: cat, number, inflow: infl, keep });
+    }
+
+    // total rows (distinct)
+    const total = allRows.length;
+
+    // rank (เหมือนเดิม): แยกหมวดแล้วเรียง keep desc
+    allRows.sort((a, b) => {
+      if (a.category !== b.category) return a.category.localeCompare(b.category);
+      if (b.keep !== a.keep) return b.keep - a.keep;
+      return a.number.localeCompare(b.number);
+    });
+
+    const items = allRows.slice(offset, offset + pageSize);
+
+    return NextResponse.json({
+      from,
+      to,
+      total,
+      items,
+      page,
+      pageSize,
+    });
+  } catch (e: any) {
+    console.error('KEEP-VIEW ERROR', e);
+    return NextResponse.json({ error: e?.message ?? 'keep-view failed' }, { status: 500 });
   }
-
-  const total = merged.length;
-  const paged = merged.slice(offset, offset + pageSize);
-
-  return NextResponse.json({
-    from: _from,
-    to: _to,
-    total,
-    items: paged,
-    page,
-    pageSize,
-  });
 }

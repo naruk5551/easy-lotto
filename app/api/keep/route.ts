@@ -13,22 +13,37 @@ function parseDateUTC(v?: unknown): Date | undefined {
   if (v == null) return undefined;
   const s = String(v).trim();
   if (!s) return undefined;
+
+  // ISO with timezone
   if (/[zZ]|[+\-]\d{2}:\d{2}$/.test(s)) {
     const d = new Date(s);
     return isNaN(d.getTime()) ? undefined : d;
   }
+
+  // "YYYY-MM-DD HH:mm" or "YYYY-MM-DDTHH:mm" => treat as UTC string
   const m = s.replace(' ', 'T').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)$/);
   if (m) return new Date(`${m[1]}T${m[2]}Z`);
+
   const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
 
 type CapRow = {
   mode: CapMode;
-  top3: number | null; tod3: number | null; top2: number | null;
-  bottom2: number | null; runTop: number | null; runBottom: number | null;
-  autoThresholdTop3: any | null; autoThresholdTod3: any | null; autoThresholdTop2: any | null;
-  autoThresholdBottom2: any | null; autoThresholdRunTop: any | null; autoThresholdRunBottom: any | null;
+  top3: number | null;
+  tod3: number | null;
+  top2: number | null;
+  bottom2: number | null;
+  runTop: number | null;
+  runBottom: number | null;
+
+  autoThresholdTop3: any | null;
+  autoThresholdTod3: any | null;
+  autoThresholdTop2: any | null;
+  autoThresholdBottom2: any | null;
+  autoThresholdRunTop: any | null;
+  autoThresholdRunBottom: any | null;
+
   convertTod3ToTop3: boolean;
 };
 
@@ -36,21 +51,21 @@ function capFor(cat: Category, cap: CapRow): number {
   if (cap.mode === 'AUTO') {
     const t = (v: any) => Number(v ?? 0);
     switch (cat) {
-      case 'TOP3':       return t(cap.autoThresholdTop3);
-      case 'TOD3':       return t(cap.autoThresholdTod3);
-      case 'TOP2':       return t(cap.autoThresholdTop2);
-      case 'BOTTOM2':    return t(cap.autoThresholdBottom2);
-      case 'RUN_TOP':    return t(cap.autoThresholdRunTop);
+      case 'TOP3': return t(cap.autoThresholdTop3);
+      case 'TOD3': return t(cap.autoThresholdTod3);
+      case 'TOP2': return t(cap.autoThresholdTop2);
+      case 'BOTTOM2': return t(cap.autoThresholdBottom2);
+      case 'RUN_TOP': return t(cap.autoThresholdRunTop);
       case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
     }
   } else {
     const n = (v: number | null) => Number(v ?? 0);
     switch (cat) {
-      case 'TOP3':       return n(cap.top3);
-      case 'TOD3':       return n(cap.tod3);
-      case 'TOP2':       return n(cap.top2);
-      case 'BOTTOM2':    return n(cap.bottom2);
-      case 'RUN_TOP':    return n(cap.runTop);
+      case 'TOP3': return n(cap.top3);
+      case 'TOD3': return n(cap.tod3);
+      case 'TOP2': return n(cap.top2);
+      case 'BOTTOM2': return n(cap.bottom2);
+      case 'RUN_TOP': return n(cap.runTop);
       case 'RUN_BOTTOM': return n(cap.runBottom);
     }
   }
@@ -66,8 +81,150 @@ function perms3(s: string) {
   ]));
 }
 
+/**
+ * ✅ แจกยอดแบบ "floor + remainder" ให้ผลรวมเท่าต้นฉบับ 100%
+ * - ป้องกันปัญหา 100 กลายเป็น 102 (จาก Math.round)
+ */
+function splitAmountExact(total: number, parts: number) {
+  const base = Math.floor(total / parts);
+  const rem = total - base * parts; // 0..parts-1
+  const out = new Array(parts).fill(base);
+  for (let i = 0; i < rem; i++) out[i] += 1;
+  return out;
+}
+
+/**
+ * คำนวณ keep สะสมถึงเวลา upto แบบ time-priority:
+ * keepDelta(from->to) = keepUpTo(to) - keepUpTo(from)
+ *
+ * ✅ เฉพาะกรณี convertTod3ToTop3:
+ * - ใช้ cap ของ TOP3 คุมความเสี่ยง
+ * - แต่ “คงแสดง TOD3” โดยเก็บผล keep ของ TOD3 แยกเป็นหมวด TOD3
+ * - หลักการจัดสรร cap: ให้ TOP3 ตรง “กิน cap ก่อน” แล้วค่อยให้ TOD3 กินที่เหลือ (ตรงตามที่คุณคาดหวังว่ารอบ 1 เต็มแล้ว รอบ 2 TOD3 ต้อง 0)
+ */
+async function computeKeepUpTo(params: {
+  startAt: Date;
+  upto: Date;
+  cap: CapRow;
+}) {
+  const { startAt, upto, cap } = params;
+
+  // inflow สะสมตั้งแต่ต้นงวด..upto (ยึดแบบ A: o.createdAt)
+  const inflow = await prisma.$queryRaw<
+    { category: Category; number: string; amount: number }[]
+  >`
+    SELECT
+      p.category AS "category",
+      p.number   AS "number",
+      COALESCE(SUM(oi."sumAmount"),0)::float AS "amount"
+    FROM "OrderItem" oi
+    JOIN "Order" o   ON oi."orderId" = o.id
+    JOIN "Product" p ON oi."productId" = p.id
+    WHERE o."createdAt" >= ${startAt} AND o."createdAt" < ${upto}
+    GROUP BY p.category, p.number
+  `;
+
+  // แยกเป็น map
+  const top3Direct = new Map<string, number>(); // number -> amount
+  const tod3 = new Map<string, number>();       // original TOD3 number -> amount
+  const others = new Map<string, number>();     // "CAT|num" -> amount
+
+  for (const r of inflow) {
+    const amt = Number(r.amount) || 0;
+    if (amt <= 0) continue;
+
+    if (r.category === 'TOP3') {
+      top3Direct.set(r.number, (top3Direct.get(r.number) || 0) + amt);
+      continue;
+    }
+
+    if (r.category === 'TOD3') {
+      tod3.set(r.number, (tod3.get(r.number) || 0) + amt);
+      continue;
+    }
+
+    const k = `${r.category}|${r.number}`;
+    others.set(k, (others.get(k) || 0) + amt);
+  }
+
+  // ผลลัพธ์ keep สะสม
+  const keepByKey = new Map<string, number>(); // "CAT|num" -> keepAmount
+
+  // ====== หมวดอื่นๆ คิดแบบ min(inflow, cap) ปกติ ======
+  for (const [k, amt] of others) {
+    const [cat] = k.split('|') as [Category];
+    const c = capFor(cat, cap);
+    keepByKey.set(k, Math.max(0, Math.min(amt, c)));
+  }
+
+  // ====== TOP3/TOD3 ======
+  const capTop3 = capFor('TOP3', cap);
+
+  if (!cap.convertTod3ToTop3) {
+    // ไม่แปลง: TOP3 กับ TOD3 คิดแยกหมวดตาม cap ของตัวเอง
+    for (const [n, amt] of top3Direct) {
+      keepByKey.set(`TOP3|${n}`, Math.max(0, Math.min(amt, capTop3)));
+    }
+    const capTod3 = capFor('TOD3', cap);
+    for (const [n, amt] of tod3) {
+      keepByKey.set(`TOD3|${n}`, Math.max(0, Math.min(amt, capTod3)));
+    }
+    return keepByKey;
+  }
+
+  // ✅ แปลง TOD3 -> TOP3 เพื่อคุม capTop3 แต่ยัง “แสดง TOD3”
+  // 1) TOP3 ตรงกิน cap ก่อน
+  const remainingCapByPerm = new Map<string, number>();
+  // init remaining cap for all perms we might touch
+  const allPerms = new Set<string>();
+  for (const n of top3Direct.keys()) allPerms.add(n);
+  for (const n of tod3.keys()) perms3(n).forEach(p => allPerms.add(p));
+
+  for (const p of allPerms) remainingCapByPerm.set(p, capTop3);
+
+  // apply direct TOP3
+  for (const [n, amt] of top3Direct) {
+    const rem = remainingCapByPerm.get(n) ?? capTop3;
+    const kept = Math.max(0, Math.min(amt, rem));
+    keepByKey.set(`TOP3|${n}`, kept);
+    remainingCapByPerm.set(n, rem - kept);
+  }
+
+  // 2) TOD3 กิน cap ที่เหลือ (จัดเรียงเลขเพื่อให้ deterministic)
+  const todNumbers = [...tod3.keys()].sort();
+  for (const todNum of todNumbers) {
+    const total = tod3.get(todNum) || 0;
+    if (total <= 0) continue;
+
+    const permList = perms3(todNum).sort(); // deterministic
+    const splits = splitAmountExact(total, permList.length);
+
+    let todKeptSum = 0;
+
+    for (let i = 0; i < permList.length; i++) {
+      const perm = permList[i];
+      const part = splits[i];
+
+      const rem = remainingCapByPerm.get(perm) ?? capTop3;
+      const keptPart = Math.max(0, Math.min(part, rem));
+      todKeptSum += keptPart;
+      remainingCapByPerm.set(perm, rem - keptPart);
+    }
+
+    if (todKeptSum > 0) {
+      keepByKey.set(`TOD3|${todNum}`, todKeptSum);
+    } else {
+      // ถ้า cap เต็มอยู่แล้ว จะไม่เกิด record TOD3 ใน keep (ตรงตามที่คุณต้องการ)
+      keepByKey.delete(`TOD3|${todNum}`);
+    }
+  }
+
+  return keepByKey;
+}
+
 export async function POST(req: NextRequest) {
   try {
+    // ---------------- read body ----------------
     let from: Date | undefined;
     let to: Date | undefined;
     try {
@@ -78,6 +235,7 @@ export async function POST(req: NextRequest) {
       }
     } catch {}
 
+    // ---------------- pick timeWindow ----------------
     let tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
     if (!tw) return NextResponse.json({ error: 'ยังไม่มี time-window' }, { status: 400 });
 
@@ -91,7 +249,6 @@ export async function POST(req: NextRequest) {
 
     const startAt = tw.startAt;
     const endAt = tw.endAt;
-
     const _from = from ? new Date(Math.max(startAt.getTime(), from.getTime())) : startAt;
     const _to = to ? new Date(Math.min(endAt.getTime(), to.getTime())) : endAt;
 
@@ -99,8 +256,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ created: 0, window: { startAt, endAt, appliedFrom: _from, appliedTo: _to } });
     }
 
-    // ✅ FIX: ใช้ CapRule "แถวล่าสุด" เหมือน settle (ไม่ใช้ upsert id=1)
-    const latestCap = await prisma.capRule.findFirst({
+    // ---------------- load latest capRule (✅ FIX: ไม่ใช้ id=1) ----------------
+    // IMPORTANT: ให้ตรงกับหน้า Cap ที่เป็น "ล่าสุด"
+    const cap = await prisma.capRule.findFirst({
       orderBy: { id: 'desc' },
       select: {
         mode: true,
@@ -111,160 +269,27 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const cap: CapRow = latestCap ? {
-      mode: latestCap.mode,
-      top3: latestCap.top3, tod3: latestCap.tod3, top2: latestCap.top2,
-      bottom2: latestCap.bottom2, runTop: latestCap.runTop, runBottom: latestCap.runBottom,
-      autoThresholdTop3: latestCap.autoThresholdTop3, autoThresholdTod3: latestCap.autoThresholdTod3, autoThresholdTop2: latestCap.autoThresholdTop2,
-      autoThresholdBottom2: latestCap.autoThresholdBottom2, autoThresholdRunTop: latestCap.autoThresholdRunTop, autoThresholdRunBottom: latestCap.autoThresholdRunBottom,
-      convertTod3ToTop3: latestCap.convertTod3ToTop3,
-    } : {
+    const capRow: CapRow = (cap ?? {
       mode: 'MANUAL',
-      top3: null, tod3: null, top2: null,
-      bottom2: null, runTop: null, runBottom: null,
-      autoThresholdTop3: null, autoThresholdTod3: null, autoThresholdTop2: null,
-      autoThresholdBottom2: null, autoThresholdRunTop: null, autoThresholdRunBottom: null,
+      top3: 0, tod3: 0, top2: 0, bottom2: 0, runTop: 0, runBottom: 0,
+      autoThresholdTop3: 0, autoThresholdTod3: 0, autoThresholdTop2: 0,
+      autoThresholdBottom2: 0, autoThresholdRunTop: 0, autoThresholdRunBottom: 0,
       convertTod3ToTop3: false,
-    };
+    }) as any;
 
-    // inflow (สะสมตั้งแต่ต้นงวด.._to)  ✅ ยึดแบบ A: ใช้ o.createdAt
-    const inflowsRaw = await prisma.$queryRaw<
-      { category: Category; number: string; inflow: number }[]
-    >`
-      SELECT p.category AS "category",
-             p.number   AS "number",
-             COALESCE(SUM(oi."sumAmount"),0)::float AS "inflow"
-      FROM "OrderItem" oi
-      JOIN "Order" o   ON oi."orderId" = o.id
-      JOIN "Product" p ON oi."productId" = p.id
-      WHERE o."createdAt" >= ${startAt} AND o."createdAt" < ${_to}
-      GROUP BY p.category, p.number
-    `;
-
-    // already kept (สะสมตั้งแต่ต้นงวด.._to)
-    const keptRaw = await prisma.$queryRaw<
-      { category: Category; number: string; kept: number }[]
-    >`
-      SELECT a.category AS "category",
-             a.number   AS "number",
-             COALESCE(SUM(a.amount),0)::float AS "kept"
-      FROM "AcceptSelf" a
-      WHERE a."createdAt" >= ${startAt} AND a."createdAt" < ${_to}
-      GROUP BY a.category, a.number
-    `;
-
-    const key = (c: Category, n: string) => `${c}|${n}`;
-
-    const inflowBy = new Map<string, number>();
-    for (const r of inflowsRaw) {
-      const amt = Number(r.inflow ?? 0);
-      if (!Number.isFinite(amt) || amt <= 0) continue;
-      inflowBy.set(key(r.category, r.number), (inflowBy.get(key(r.category, r.number)) ?? 0) + amt);
-    }
-
-    const keptBy = new Map<string, number>();
-    for (const r of keptRaw) {
-      const amt = Number(r.kept ?? 0);
-      if (!Number.isFinite(amt) || amt <= 0) continue;
-      keptBy.set(key(r.category, r.number), (keptBy.get(key(r.category, r.number)) ?? 0) + amt);
-    }
+    // ---------------- compute keep delta (time-priority) ----------------
+    // keepDelta = keepUpTo(_to) - keepUpTo(_from)
+    const keepTo = await computeKeepUpTo({ startAt, upto: _to, cap: capRow });
+    const keepFrom = await computeKeepUpTo({ startAt, upto: _from, cap: capRow });
 
     const toInsert: { category: Category; number: string; amount: number }[] = [];
 
-    // =========================================================
-    // ✅ FIX: เมื่อ convertTod3ToTop3 = true
-    // - “คุมอั้น TOD3 ด้วย cap ของ TOP3”
-    // - “แต่บันทึก/แสดง AcceptSelf เป็น TOD3” (เพื่อให้หาเลขตรวจรางวัลง่าย)
-    // - รองรับกรณี cap ถูกเต็มแล้วในรอบก่อน → รอบใหม่ไม่ควรมี keep เพิ่ม
-    // =========================================================
-
-    const convert = !!cap.convertTod3ToTop3;
-    const capTop3 = capFor('TOP3', cap) ?? 0;
-
-    // keptPerm: เก็บยอดรับเองสะสมในเชิง “TOP3 per permutation”
-    const keptPermTop3 = new Map<string, number>();
-
-    // 1) อัปเดต keptPermTop3 จาก AcceptSelf ที่มีอยู่แล้ว (TOP3 + TOD3 กระจายเป็น perms)
-    for (const [k, keptAmt] of keptBy.entries()) {
-      const [cat, num] = k.split('|') as [Category, string];
-
-      if (cat === 'TOP3') {
-        keptPermTop3.set(num, (keptPermTop3.get(num) ?? 0) + keptAmt);
-        continue;
-      }
-
-      if (convert && cat === 'TOD3') {
-        const list = perms3(num);
-        const perEach = Math.round(keptAmt / list.length); // ✅ ต้องเหมือน settle
-        for (const nn of list) {
-          keptPermTop3.set(nn, (keptPermTop3.get(nn) ?? 0) + perEach);
-        }
-      }
-    }
-
-    // 2) หมวดอื่น ๆ (ยกเว้น TOD3 ตอน convert) ใช้สูตรเดิม: need = min(inflow, cap) - already
-    for (const cat of CATEGORY_VALUES) {
-      if (convert && cat === 'TOD3') continue;
-
-      const capAmt = capFor(cat, cap) ?? 0;
-
-      for (const [k, inflowAmt] of inflowBy.entries()) {
-        const [c, num] = k.split('|') as [Category, string];
-        if (c !== cat) continue;
-
-        const already = keptBy.get(k) ?? 0;
-        const target = Math.min(inflowAmt, capAmt);
-        const need = target - already;
-
-        if (need > 0) {
-          toInsert.push({ category: c, number: num, amount: need });
-        }
-      }
-    }
-
-    // 3) TOD3 ตอน convert: คุมด้วย capTop3 ในระดับ permutation แล้วบันทึกกลับเป็น TOD3
-    if (convert) {
-      for (const [k, inflowAmt] of inflowBy.entries()) {
-        const [c, num] = k.split('|') as [Category, string];
-        if (c !== 'TOD3') continue;
-
-        const alreadyTod3 = keptBy.get(k) ?? 0;
-
-        const list = perms3(num);
-        const perIn = Math.round(inflowAmt / list.length);       // ✅ ต้องเหมือน settle
-        const perKept = Math.round(alreadyTod3 / list.length);   // ✅ ใช้ rounding เดียวกันเพื่อให้รอบย่อยไม่เพี้ยน
-        const perNeed = Math.max(perIn - perKept, 0);
-
-        if (perNeed <= 0) continue;
-
-        let addTotal = 0;
-
-        for (const nn of list) {
-          const alreadyPerm = keptPermTop3.get(nn) ?? 0;
-          const remaining = Math.max(capTop3 - alreadyPerm, 0);
-
-          const add = Math.min(perNeed, remaining);
-          if (add > 0) {
-            addTotal += add;
-            keptPermTop3.set(nn, alreadyPerm + add); // ✅ กัน “รอบถัดไป” เกิน cap
-          }
-        }
-
-        if (addTotal > 0) {
-          toInsert.push({ category: 'TOD3', number: num, amount: addTotal }); // ✅ แสดงเป็น TOD3 ตามที่ต้องการ
-        }
-      }
-    } else {
-      // ไม่ convert: TOD3 ใช้ cap ของตัวเองตามเดิม
-      const capTod3 = capFor('TOD3', cap) ?? 0;
-      for (const [k, inflowAmt] of inflowBy.entries()) {
-        const [c, num] = k.split('|') as [Category, string];
-        if (c !== 'TOD3') continue;
-
-        const already = keptBy.get(k) ?? 0;
-        const target = Math.min(inflowAmt, capTod3);
-        const need = target - already;
-        if (need > 0) toInsert.push({ category: 'TOD3', number: num, amount: need });
+    for (const [k, vTo] of keepTo) {
+      const vFrom = keepFrom.get(k) || 0;
+      const delta = (Number(vTo) || 0) - (Number(vFrom) || 0);
+      if (delta > 0) {
+        const [cat, number] = k.split('|') as [Category, string];
+        toInsert.push({ category: cat, number, amount: delta });
       }
     }
 
@@ -272,20 +297,18 @@ export async function POST(req: NextRequest) {
 
     if (toInsert.length > 0) {
       await prisma.acceptSelf.createMany({
-        data: toInsert.map((row) => ({
+        data: toInsert.map(row => ({
           category: row.category,
           number: row.number,
           amount: row.amount,
         })),
       });
-
       created = toInsert.length;
     }
 
     return NextResponse.json({
       created,
       window: { startAt, endAt, appliedFrom: _from, appliedTo: _to },
-      convertTod3ToTop3: convert, // (debug)
     });
   } catch (e: any) {
     console.error('KEEP ERROR', e);

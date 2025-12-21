@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
         if (cap.convertTod3ToTop3) {
           const list = perms3(r.number);
           // ⬇⬇⬇ ปัดเศษตอนแปลงโต๊ด → บน (เฉลี่ยแล้ว Math.round เป็นบาทเต็ม)
-          const perEachRounded = Math.round(r.inflow / list.length);
+          const perEachRounded = Math.ceil(r.inflow / list.length);
           for (const nn of list) {
             const k: Key = `TOP3|${nn}`;
             const cur = inflowBy.get(k)?.amount ?? 0;
@@ -255,7 +255,7 @@ export async function POST(req: NextRequest) {
       const already = sentByProductId.get(productId as number) ?? 0;
       const needRaw = demandTotal - already;
       // ⬇⬇⬇ ปัดเศษยอด export ให้เป็นบาทเต็มก่อนสร้าง ExcessBuy
-      const need = Math.round(needRaw);
+      const need = Math.ceil(needRaw);
       if (need > 0) toCreate.push({ productId: productId as number, amount: need });
     }
 
