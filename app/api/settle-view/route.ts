@@ -1,3 +1,4 @@
+// app/api/settle-view/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 //import { Category } from '@prisma/client';

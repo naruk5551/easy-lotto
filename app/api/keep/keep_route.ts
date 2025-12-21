@@ -26,16 +26,16 @@ function parseDateUTC(v?: unknown): Date | undefined {
 
 type CapRow = {
   mode: CapMode;
-  top3: number|null; tod3: number|null; top2: number|null;
-  bottom2: number|null; runTop: number|null; runBottom: number|null;
-  autoThresholdTop3: any|null; autoThresholdTod3: any|null; autoThresholdTop2: any|null;
-  autoThresholdBottom2: any|null; autoThresholdRunTop: any|null; autoThresholdRunBottom: any|null;
+  top3: number | null; tod3: number | null; top2: number | null;
+  bottom2: number | null; runTop: number | null; runBottom: number | null;
+  autoThresholdTop3: any | null; autoThresholdTod3: any | null; autoThresholdTop2: any | null;
+  autoThresholdBottom2: any | null; autoThresholdRunTop: any | null; autoThresholdRunBottom: any | null;
   convertTod3ToTop3: boolean;
 };
 
 function capFor(cat: Category, cap: CapRow): number {
   if (cap.mode === 'AUTO') {
-    const t = (v:any)=> Number(v ?? 0);
+    const t = (v: any) => Number(v ?? 0);
     switch (cat) {
       case 'TOP3':       return t(cap.autoThresholdTop3);
       case 'TOD3':       return t(cap.autoThresholdTod3);
@@ -45,7 +45,7 @@ function capFor(cat: Category, cap: CapRow): number {
       case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
     }
   } else {
-    const n = (v:number|null)=> Number(v ?? 0);
+    const n = (v: number | null) => Number(v ?? 0);
     switch (cat) {
       case 'TOP3':       return n(cap.top3);
       case 'TOD3':       return n(cap.tod3);
@@ -73,13 +73,13 @@ export async function POST(req: NextRequest) {
     let to: Date | undefined;
     try {
       if (req.headers.get('content-type')?.includes('application/json')) {
-        const body = await req.json().catch(()=>({}));
+        const body = await req.json().catch(() => ({}));
         from = parseDateUTC((body as any)?.from);
         to   = parseDateUTC((body as any)?.to);
       }
     } catch {}
 
-    let tw = await prisma.timeWindow.findFirst({ orderBy: { id:'desc' } });
+    let tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
     if (!tw) return NextResponse.json({ error: 'ยังไม่มี time-window' }, { status: 400 });
 
     if (from && to) {
@@ -98,11 +98,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ created: 0, window: { startAt, endAt, appliedFrom: _from, appliedTo: _to } });
     }
 
-    // snapshot cap
-    const cap = await prisma.capRule.upsert({
-      where: { id: 1 },
-      create: { id: 1, mode: 'MANUAL' },
-      update: {},
+    // ✅ FIX: keep ต้องใช้ CapRule "ล่าสุด" เหมือน settle (เดิมใช้ upsert id=1 ทำให้ convert/mode ไม่ตรง)
+    const latestCap = await prisma.capRule.findFirst({
+      orderBy: { id: 'desc' }, // <<-- FIX บรรทัดนี้: ใช้แถวล่าสุดจริง
       select: {
         mode: true,
         top3: true, tod3: true, top2: true, bottom2: true, runTop: true, runBottom: true,
@@ -111,6 +109,22 @@ export async function POST(req: NextRequest) {
         convertTod3ToTop3: true,
       },
     });
+
+    const cap: CapRow = latestCap ? {
+      mode: latestCap.mode as CapMode,
+      top3: latestCap.top3, tod3: latestCap.tod3, top2: latestCap.top2,
+      bottom2: latestCap.bottom2, runTop: latestCap.runTop, runBottom: latestCap.runBottom,
+      autoThresholdTop3: latestCap.autoThresholdTop3, autoThresholdTod3: latestCap.autoThresholdTod3, autoThresholdTop2: latestCap.autoThresholdTop2,
+      autoThresholdBottom2: latestCap.autoThresholdBottom2, autoThresholdRunTop: latestCap.autoThresholdRunTop, autoThresholdRunBottom: latestCap.autoThresholdRunBottom,
+      convertTod3ToTop3: !!latestCap.convertTod3ToTop3,
+    } : {
+      // fallback หากยังไม่เคยตั้งค่า cap ใด ๆ
+      mode: 'MANUAL',
+      top3: null, tod3: null, top2: null, bottom2: null, runTop: null, runBottom: null,
+      autoThresholdTop3: null, autoThresholdTod3: null, autoThresholdTop2: null,
+      autoThresholdBottom2: null, autoThresholdRunTop: null, autoThresholdRunBottom: null,
+      convertTod3ToTop3: false,
+    };
 
     // inflow ตั้งแต่ต้นงวด.._to
     const inflowsRaw = await prisma.$queryRaw<
@@ -121,7 +135,7 @@ export async function POST(req: NextRequest) {
       FROM "OrderItem" oi
       JOIN "Order" o   ON oi."orderId" = o.id
       JOIN "Product" p ON oi."productId" = p.id
-      WHERE o."createdAt" >= ${startAt} AND o."createdAt" < ${_to}
+      WHERE oi."createdAt" >= ${startAt} AND oi."createdAt" < ${_to}
       GROUP BY p.id, p.category, p.number
     `;
 
@@ -134,7 +148,7 @@ export async function POST(req: NextRequest) {
         const perEach = r.inflow / perms.length;
         for (const nn of perms) {
           const k: Key = `TOP3|${nn}`;
-          inflowBy.set(k, { cat:'TOP3', number: nn, amount: (inflowBy.get(k)?.amount ?? 0) + perEach });
+          inflowBy.set(k, { cat: 'TOP3', number: nn, amount: (inflowBy.get(k)?.amount ?? 0) + perEach });
         }
       } else {
         const k: Key = `${r.category}|${r.number}`;

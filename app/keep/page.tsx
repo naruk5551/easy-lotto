@@ -28,10 +28,24 @@ function toLocalInputValue(d: Date) {
   return noTZ.toISOString().slice(0, 16);
 }
 
-// แปลงค่าจาก <input type="datetime-local"> (ตีเป็นเวลาไทย) → UTC ISO
-function toUTCFromLocalInput(v?: string | null) {
+// ✅ FIX TIMEZONE: แปลงค่าจาก <input type="datetime-local"> (ตีเป็น “เวลาไทย +07:00” เสมอ) → UTC ISO
+function toUTCFromThaiLocalInput(v?: string | null) {
   if (!v) return undefined;
-  return new Date(v).toISOString();
+  const [date, time] = v.split('T');
+  const [Y, M, D] = (date || '').split('-').map(Number);
+  const [h, mi] = (time || '').split(':').map(Number);
+
+  // NOTE: input เป็นเวลาไทย (+07) → แปลงเป็น UTC โดยลบ 7 ชม.
+  const ms = Date.UTC(Y, (M || 1) - 1, D || 1, (h || 0) - 7, mi || 0, 0, 0);
+  return new Date(ms).toISOString();
+}
+
+// ✅ FIX TIMEZONE (สำหรับแสดงผลกรองช่วงเวลา): สร้าง Date จาก input โดย “บังคับ +07:00”
+function thaiLocalInputToDate(v?: string) {
+  if (!v) return undefined;
+  // ใส่ offset ให้ชัดเจน ไม่พึ่ง timezone เครื่องผู้ใช้
+  const d = new Date(`${v}:00+07:00`); // v = YYYY-MM-DDTHH:mm
+  return isNaN(d.getTime()) ? undefined : d;
 }
 
 // อ่านยอดจากแถว (ชื่อ field ที่ API อาจต่างกันเล็กน้อย)
@@ -80,8 +94,9 @@ export default function KeepPage() {
     if (!fromLocal || !toLocal) return;
     setLoading(true);
     try {
-      const fromISO = toUTCFromLocalInput(fromLocal)!;
-      const toISO = toUTCFromLocalInput(toLocal)!;
+      // ✅ FIX TIMEZONE: ใช้ตัวแปลงแบบบังคับเวลาไทย (+07) → UTC
+      const fromISO = toUTCFromThaiLocalInput(fromLocal)!; // <--- changed
+      const toISO = toUTCFromThaiLocalInput(toLocal)!;     // <--- changed
 
       // 1) บันทึก AcceptSelf ตามช่วง (เหมือนเดิม)
       await fetch('/api/keep', {
@@ -159,6 +174,10 @@ export default function KeepPage() {
     [totalRowCount, pageSize],
   );
 
+  // ✅ FIX TIMEZONE: ข้อความ “ช่วงเวลา” ในกล่องเขียว ให้แสดงตามเวลาไทยจริง (ไม่พึ่ง timezone เครื่อง)
+  const fromThaiDate = useMemo(() => thaiLocalInputToDate(fromLocal), [fromLocal]); // <--- added
+  const toThaiDate = useMemo(() => thaiLocalInputToDate(toLocal), [toLocal]);       // <--- added
+
   return (
     <div className="p-4 space-y-4">
       {/* Header */}
@@ -202,9 +221,10 @@ export default function KeepPage() {
             {loading ? 'กำลังคำนวณ…' : 'กรองช่วงเวลา'}
           </button>
 
-          {fromLocal && toLocal && (
+          {fromThaiDate && toThaiDate && (
             <div className="px-3 py-2 rounded bg-emerald-100 text-emerald-900">
-              ช่วงเวลา: {fmtThai(new Date(fromLocal))} – {fmtThai(new Date(toLocal))}
+              ช่วงเวลา: {fmtThai(fromThaiDate)} – {fmtThai(toThaiDate)}
+              {/* ✅ FIX TIMEZONE: แสดงจาก Date ที่บังคับ +07:00 */}
             </div>
           )}
         </div>
@@ -219,8 +239,7 @@ export default function KeepPage() {
             onChange={(e) => {
               const sz = Number(e.target.value) || 10;
               setPageSize(sz);
-              setPage(1); // เปลี่ยนขนาดหน้าให้กลับไปหน้าแรก
-              // ไม่ยิง API ทันที ต้องกด "กรองช่วงเวลา" เองหากต้องการคำนวณ keep ใหม่
+              setPage(1);
             }}
             className="border rounded px-2 py-1"
           >

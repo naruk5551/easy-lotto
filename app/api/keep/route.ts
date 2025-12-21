@@ -7,7 +7,6 @@ import { prisma } from '@/lib/prisma';
 const CATEGORY_VALUES = ['TOP3', 'TOD3', 'TOP2', 'BOTTOM2', 'RUN_TOP', 'RUN_BOTTOM'] as const;
 type Category = (typeof CATEGORY_VALUES)[number];
 
-// ระบุเองแทน enum จาก Prisma (เวอร์ชันใหม่ไม่ได้ export CapMode โดยตรง)
 type CapMode = 'MANUAL' | 'AUTO';
 
 function parseDateUTC(v?: unknown): Date | undefined {
@@ -26,16 +25,16 @@ function parseDateUTC(v?: unknown): Date | undefined {
 
 type CapRow = {
   mode: CapMode;
-  top3: number|null; tod3: number|null; top2: number|null;
-  bottom2: number|null; runTop: number|null; runBottom: number|null;
-  autoThresholdTop3: any|null; autoThresholdTod3: any|null; autoThresholdTop2: any|null;
-  autoThresholdBottom2: any|null; autoThresholdRunTop: any|null; autoThresholdRunBottom: any|null;
+  top3: number | null; tod3: number | null; top2: number | null;
+  bottom2: number | null; runTop: number | null; runBottom: number | null;
+  autoThresholdTop3: any | null; autoThresholdTod3: any | null; autoThresholdTop2: any | null;
+  autoThresholdBottom2: any | null; autoThresholdRunTop: any | null; autoThresholdRunBottom: any | null;
   convertTod3ToTop3: boolean;
 };
 
 function capFor(cat: Category, cap: CapRow): number {
   if (cap.mode === 'AUTO') {
-    const t = (v:any)=> Number(v ?? 0);
+    const t = (v: any) => Number(v ?? 0);
     switch (cat) {
       case 'TOP3':       return t(cap.autoThresholdTop3);
       case 'TOD3':       return t(cap.autoThresholdTod3);
@@ -45,7 +44,7 @@ function capFor(cat: Category, cap: CapRow): number {
       case 'RUN_BOTTOM': return t(cap.autoThresholdRunBottom);
     }
   } else {
-    const n = (v:number|null)=> Number(v ?? 0);
+    const n = (v: number | null) => Number(v ?? 0);
     switch (cat) {
       case 'TOP3':       return n(cap.top3);
       case 'TOD3':       return n(cap.tod3);
@@ -73,36 +72,36 @@ export async function POST(req: NextRequest) {
     let to: Date | undefined;
     try {
       if (req.headers.get('content-type')?.includes('application/json')) {
-        const body = await req.json().catch(()=>({}));
+        const body = await req.json().catch(() => ({}));
         from = parseDateUTC((body as any)?.from);
-        to   = parseDateUTC((body as any)?.to);
+        to = parseDateUTC((body as any)?.to);
       }
     } catch {}
 
-    let tw = await prisma.timeWindow.findFirst({ orderBy: { id:'desc' } });
+    let tw = await prisma.timeWindow.findFirst({ orderBy: { id: 'desc' } });
     if (!tw) return NextResponse.json({ error: 'ยังไม่มี time-window' }, { status: 400 });
 
     if (from && to) {
       const host = await prisma.timeWindow.findFirst({
-        where: { startAt: { lte: from }, endAt: { gte: to } }, orderBy: { id: 'desc' }
+        where: { startAt: { lte: from }, endAt: { gte: to } },
+        orderBy: { id: 'desc' },
       });
       if (host) tw = host;
     }
 
     const startAt = tw.startAt;
-    const endAt   = tw.endAt;
+    const endAt = tw.endAt;
+
     const _from = from ? new Date(Math.max(startAt.getTime(), from.getTime())) : startAt;
-    const _to   = to   ? new Date(Math.min(endAt.getTime(),   to.getTime()))   : endAt;
+    const _to = to ? new Date(Math.min(endAt.getTime(), to.getTime())) : endAt;
 
     if (!(_from < _to)) {
       return NextResponse.json({ created: 0, window: { startAt, endAt, appliedFrom: _from, appliedTo: _to } });
     }
 
-    // snapshot cap
-    const cap = await prisma.capRule.upsert({
-      where: { id: 1 },
-      create: { id: 1, mode: 'MANUAL' },
-      update: {},
+    // ✅ FIX: ใช้ CapRule "แถวล่าสุด" เหมือน settle (ไม่ใช้ upsert id=1)
+    const latestCap = await prisma.capRule.findFirst({
+      orderBy: { id: 'desc' },
       select: {
         mode: true,
         top3: true, tod3: true, top2: true, bottom2: true, runTop: true, runBottom: true,
@@ -112,81 +111,181 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // inflow ตั้งแต่ต้นงวด.._to
+    const cap: CapRow = latestCap ? {
+      mode: latestCap.mode,
+      top3: latestCap.top3, tod3: latestCap.tod3, top2: latestCap.top2,
+      bottom2: latestCap.bottom2, runTop: latestCap.runTop, runBottom: latestCap.runBottom,
+      autoThresholdTop3: latestCap.autoThresholdTop3, autoThresholdTod3: latestCap.autoThresholdTod3, autoThresholdTop2: latestCap.autoThresholdTop2,
+      autoThresholdBottom2: latestCap.autoThresholdBottom2, autoThresholdRunTop: latestCap.autoThresholdRunTop, autoThresholdRunBottom: latestCap.autoThresholdRunBottom,
+      convertTod3ToTop3: latestCap.convertTod3ToTop3,
+    } : {
+      mode: 'MANUAL',
+      top3: null, tod3: null, top2: null,
+      bottom2: null, runTop: null, runBottom: null,
+      autoThresholdTop3: null, autoThresholdTod3: null, autoThresholdTop2: null,
+      autoThresholdBottom2: null, autoThresholdRunTop: null, autoThresholdRunBottom: null,
+      convertTod3ToTop3: false,
+    };
+
+    // inflow (สะสมตั้งแต่ต้นงวด.._to)  ✅ ยึดแบบ A: ใช้ o.createdAt
     const inflowsRaw = await prisma.$queryRaw<
-      { productId: number; category: Category; number: string; inflow: number }[]
+      { category: Category; number: string; inflow: number }[]
     >`
-      SELECT p.id AS "productId", p.category AS "category", p.number AS "number",
+      SELECT p.category AS "category",
+             p.number   AS "number",
              COALESCE(SUM(oi."sumAmount"),0)::float AS "inflow"
       FROM "OrderItem" oi
       JOIN "Order" o   ON oi."orderId" = o.id
       JOIN "Product" p ON oi."productId" = p.id
       WHERE o."createdAt" >= ${startAt} AND o."createdAt" < ${_to}
-      GROUP BY p.id, p.category, p.number
+      GROUP BY p.category, p.number
     `;
 
-    // รวม TOD3 -> TOP3 ถ้าตั้งค่าไว้
-    type Key = string;
-    const inflowBy = new Map<Key, { cat: Category; number: string; amount: number }>();
-    for (const r of inflowsRaw) {
-      if (r.category === 'TOD3' && cap.convertTod3ToTop3) {
-        const perms = perms3(r.number);
-        const perEach = r.inflow / perms.length;
-        for (const nn of perms) {
-          const k: Key = `TOP3|${nn}`;
-          inflowBy.set(k, { cat:'TOP3', number: nn, amount: (inflowBy.get(k)?.amount ?? 0) + perEach });
-        }
-      } else {
-        const k: Key = `${r.category}|${r.number}`;
-        inflowBy.set(k, { cat: r.category, number: r.number, amount: (inflowBy.get(k)?.amount ?? 0) + r.inflow });
-      }
-    }
-
-    // already kept ภายในงวดจนถึง _to
-    const keptRaw = await prisma.$queryRaw<{ category: Category; number: string; kept: number }[]>`
-      SELECT a.category AS "category", a.number AS "number",
+    // already kept (สะสมตั้งแต่ต้นงวด.._to)
+    const keptRaw = await prisma.$queryRaw<
+      { category: Category; number: string; kept: number }[]
+    >`
+      SELECT a.category AS "category",
+             a.number   AS "number",
              COALESCE(SUM(a.amount),0)::float AS "kept"
       FROM "AcceptSelf" a
       WHERE a."createdAt" >= ${startAt} AND a."createdAt" < ${_to}
       GROUP BY a.category, a.number
     `;
-    const keptByKey = new Map<Key, number>();
-    for (const r of keptRaw) {
-      keptByKey.set(`${r.category}|${r.number}`, r.kept);
+
+    const key = (c: Category, n: string) => `${c}|${n}`;
+
+    const inflowBy = new Map<string, number>();
+    for (const r of inflowsRaw) {
+      const amt = Number(r.inflow ?? 0);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      inflowBy.set(key(r.category, r.number), (inflowBy.get(key(r.category, r.number)) ?? 0) + amt);
     }
 
-    // แทนที่จะ create ทีละแถว เราเก็บไว้ใน array แล้วค่อยยิง createMany ทีเดียว
+    const keptBy = new Map<string, number>();
+    for (const r of keptRaw) {
+      const amt = Number(r.kept ?? 0);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      keptBy.set(key(r.category, r.number), (keptBy.get(key(r.category, r.number)) ?? 0) + amt);
+    }
+
     const toInsert: { category: Category; number: string; amount: number }[] = [];
 
-    for (const { cat, number, amount } of inflowBy.values()) {
-      const capAmt = capFor(cat, cap as CapRow) ?? 0;
-      const target = Math.min(amount, capAmt); // รับเองได้รวมทั้งงวด
-      const already = keptByKey.get(`${cat}|${number}`) ?? 0;
-      const need = target - already;
-      if (need > 0) {
-        toInsert.push({ category: cat, number, amount: need });
+    // =========================================================
+    // ✅ FIX: เมื่อ convertTod3ToTop3 = true
+    // - “คุมอั้น TOD3 ด้วย cap ของ TOP3”
+    // - “แต่บันทึก/แสดง AcceptSelf เป็น TOD3” (เพื่อให้หาเลขตรวจรางวัลง่าย)
+    // - รองรับกรณี cap ถูกเต็มแล้วในรอบก่อน → รอบใหม่ไม่ควรมี keep เพิ่ม
+    // =========================================================
+
+    const convert = !!cap.convertTod3ToTop3;
+    const capTop3 = capFor('TOP3', cap) ?? 0;
+
+    // keptPerm: เก็บยอดรับเองสะสมในเชิง “TOP3 per permutation”
+    const keptPermTop3 = new Map<string, number>();
+
+    // 1) อัปเดต keptPermTop3 จาก AcceptSelf ที่มีอยู่แล้ว (TOP3 + TOD3 กระจายเป็น perms)
+    for (const [k, keptAmt] of keptBy.entries()) {
+      const [cat, num] = k.split('|') as [Category, string];
+
+      if (cat === 'TOP3') {
+        keptPermTop3.set(num, (keptPermTop3.get(num) ?? 0) + keptAmt);
+        continue;
+      }
+
+      if (convert && cat === 'TOD3') {
+        const list = perms3(num);
+        const perEach = Math.round(keptAmt / list.length); // ✅ ต้องเหมือน settle
+        for (const nn of list) {
+          keptPermTop3.set(nn, (keptPermTop3.get(nn) ?? 0) + perEach);
+        }
+      }
+    }
+
+    // 2) หมวดอื่น ๆ (ยกเว้น TOD3 ตอน convert) ใช้สูตรเดิม: need = min(inflow, cap) - already
+    for (const cat of CATEGORY_VALUES) {
+      if (convert && cat === 'TOD3') continue;
+
+      const capAmt = capFor(cat, cap) ?? 0;
+
+      for (const [k, inflowAmt] of inflowBy.entries()) {
+        const [c, num] = k.split('|') as [Category, string];
+        if (c !== cat) continue;
+
+        const already = keptBy.get(k) ?? 0;
+        const target = Math.min(inflowAmt, capAmt);
+        const need = target - already;
+
+        if (need > 0) {
+          toInsert.push({ category: c, number: num, amount: need });
+        }
+      }
+    }
+
+    // 3) TOD3 ตอน convert: คุมด้วย capTop3 ในระดับ permutation แล้วบันทึกกลับเป็น TOD3
+    if (convert) {
+      for (const [k, inflowAmt] of inflowBy.entries()) {
+        const [c, num] = k.split('|') as [Category, string];
+        if (c !== 'TOD3') continue;
+
+        const alreadyTod3 = keptBy.get(k) ?? 0;
+
+        const list = perms3(num);
+        const perIn = Math.round(inflowAmt / list.length);       // ✅ ต้องเหมือน settle
+        const perKept = Math.round(alreadyTod3 / list.length);   // ✅ ใช้ rounding เดียวกันเพื่อให้รอบย่อยไม่เพี้ยน
+        const perNeed = Math.max(perIn - perKept, 0);
+
+        if (perNeed <= 0) continue;
+
+        let addTotal = 0;
+
+        for (const nn of list) {
+          const alreadyPerm = keptPermTop3.get(nn) ?? 0;
+          const remaining = Math.max(capTop3 - alreadyPerm, 0);
+
+          const add = Math.min(perNeed, remaining);
+          if (add > 0) {
+            addTotal += add;
+            keptPermTop3.set(nn, alreadyPerm + add); // ✅ กัน “รอบถัดไป” เกิน cap
+          }
+        }
+
+        if (addTotal > 0) {
+          toInsert.push({ category: 'TOD3', number: num, amount: addTotal }); // ✅ แสดงเป็น TOD3 ตามที่ต้องการ
+        }
+      }
+    } else {
+      // ไม่ convert: TOD3 ใช้ cap ของตัวเองตามเดิม
+      const capTod3 = capFor('TOD3', cap) ?? 0;
+      for (const [k, inflowAmt] of inflowBy.entries()) {
+        const [c, num] = k.split('|') as [Category, string];
+        if (c !== 'TOD3') continue;
+
+        const already = keptBy.get(k) ?? 0;
+        const target = Math.min(inflowAmt, capTod3);
+        const need = target - already;
+        if (need > 0) toInsert.push({ category: 'TOD3', number: num, amount: need });
       }
     }
 
     let created = 0;
 
     if (toInsert.length > 0) {
-      // ยิง insert รอบเดียวแทนหลายรอบ
       await prisma.acceptSelf.createMany({
-        data: toInsert.map(row => ({
+        data: toInsert.map((row) => ({
           category: row.category,
           number: row.number,
           amount: row.amount,
         })),
       });
 
-      // จำนวนแถวที่สร้าง = จำนวนรายการที่เราคิดว่า need > 0
       created = toInsert.length;
     }
 
     return NextResponse.json({
       created,
-      window: { startAt, endAt, appliedFrom: _from, appliedTo: _to }
+      window: { startAt, endAt, appliedFrom: _from, appliedTo: _to },
+      convertTod3ToTop3: convert, // (debug)
     });
   } catch (e: any) {
     console.error('KEEP ERROR', e);

@@ -1,3 +1,4 @@
+// app/api/summary/route.ts
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
@@ -51,7 +52,7 @@ export async function GET(req: Request) {
       });
       if (!latest) {
         return NextResponse.json({
-          from: null, to: null, prize: 0, prizeDealer: 0, prizeSelf: 0, rows: []
+          from: null, to: null, prize: 0, prizeDealer: 0, prizeSelf: 0, rows: [],
         });
       }
       fromISO = latest.startAt.toISOString();
@@ -61,72 +62,81 @@ export async function GET(req: Request) {
     const from = parseISO(fromISO)!;
     const to = parseISO(toISO)!;
 
-    /**
-     * 🔥 Optimization สำคัญที่สุด:
-     * รวม inflow + send + product/category เข้าคิวรีเดียว
-     */
-    const baseRows = await prisma.$queryRaw<{
-      productId: number;
+    // =====================================================
+    // 1) inflow: ยอดสั่งซื้อ (ซื้อจริง) จาก OrderItem (ยึดแบบ A: o.createdAt)
+    // =====================================================
+    const inflowRows = await prisma.$queryRaw<{
       category: Cat;
-      number: string;
       inflow: number;
-      send: number;
     }[]>`
-      WITH 
-      inflow AS (
-        SELECT p.id AS "productId",
-               p.category AS "category",
-               p.number AS "number",
-               COALESCE(SUM(oi."sumAmount"),0)::float AS inflow
-        FROM "OrderItem" oi
-        JOIN "Order" o ON oi."orderId" = o.id
-        JOIN "Product" p ON p.id = oi."productId"
-        WHERE o."createdAt" >= ${from} AND o."createdAt" < ${to}
-        GROUP BY p.id, p.category, p.number
-      ),
-      sent AS (
-        SELECT p.id AS "productId",
-               COALESCE(SUM(ex.amount),0)::float AS send
-        FROM "ExcessBuy" ex
-        JOIN "SettleBatch" b ON b.id = ex."batchId"
-        JOIN "Product" p ON p.id = ex."productId"
-        WHERE b."from" >= ${from} AND b."to" <= ${to}
-        GROUP BY p.id
-      )
-      SELECT 
-        i."productId",
-        i."category",
-        i."number",
-        i."inflow",
-        COALESCE(s.send,0)::float AS send
-      FROM inflow i
-      LEFT JOIN sent s ON s."productId" = i."productId"
-      ORDER BY i."category", i."number"
+      SELECT
+        p.category AS "category",
+        COALESCE(SUM(oi."sumAmount"),0)::float AS "inflow"
+      FROM "OrderItem" oi
+      JOIN "Order" o   ON oi."orderId" = o.id
+      JOIN "Product" p ON p.id = oi."productId"
+      WHERE o."createdAt" >= ${from} AND o."createdAt" < ${to}
+      GROUP BY p.category
     `;
 
-    /** รวมยอดตามหมวด */
     const inflowByCat = new Map<Cat, number>();
+    for (const r of inflowRows) {
+      inflowByCat.set(r.category, (inflowByCat.get(r.category) || 0) + (Number(r.inflow) || 0));
+    }
+
+    // =====================================================
+    // 2) ✅ acceptSelf: ต้องอ่านจาก AcceptSelf เท่านั้น (นี่คือจุดแก้หลัก)
+    //    ห้ามใช้ inflow - send เพราะจะเพี้ยนเมื่อมีการแปลงโต๊ด→บน
+    // =====================================================
+    const acceptRows = await prisma.$queryRaw<{
+      category: Cat;
+      accept: number;
+    }[]>`
+      SELECT
+        a.category AS "category",
+        COALESCE(SUM(a.amount),0)::float AS "accept"
+      FROM "AcceptSelf" a
+      WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to} -- ✅ ใช้ช่วงเวลาจริงของการ "รับเองเพิ่ม" ในรอบนั้น
+      GROUP BY a.category
+    `;
+
+    const acceptByCat = new Map<Cat, number>();
+    for (const r of acceptRows) {
+      acceptByCat.set(r.category, (acceptByCat.get(r.category) || 0) + (Number(r.accept) || 0));
+    }
+
+    // =====================================================
+    // 3) shouldSend: ยอดส่งเจ้ามือ จาก ExcessBuy (อิง SettleBatch)
+    // =====================================================
+    const sendRows = await prisma.$queryRaw<{
+      category: Cat;
+      send: number;
+    }[]>`
+      SELECT
+        p.category AS "category",
+        COALESCE(SUM(ex.amount),0)::float AS "send"
+      FROM "ExcessBuy" ex
+      JOIN "SettleBatch" b ON b.id = ex."batchId"
+      JOIN "Product" p     ON p.id = ex."productId"
+      WHERE b."from" >= ${from} AND b."to" <= ${to}
+      GROUP BY p.category
+    `;
+
     const sendByCat = new Map<Cat, number>();
-
-    for (const r of baseRows) {
-      inflowByCat.set(r.category, (inflowByCat.get(r.category) || 0) + r.inflow);
-      sendByCat.set(r.category, (sendByCat.get(r.category) || 0) + r.send);
+    for (const r of sendRows) {
+      sendByCat.set(r.category, (sendByCat.get(r.category) || 0) + (Number(r.send) || 0));
     }
 
-    /** keep = inflow - send */
-    const keepByCat = new Map<Cat, number>();
-    for (const cat of CATS) {
-      keepByCat.set(cat, Math.max(0, (inflowByCat.get(cat) || 0) - (sendByCat.get(cat) || 0)));
-    }
-
-    /** PrizeSetting */
+    // =====================================================
+    // 4) PrizeSetting + payout
+    // =====================================================
     const ps = await prisma.prizeSetting.findFirst({
       where: { timeWindow: { startAt: from, endAt: to } },
       select: {
         payoutTop3: true, payoutTod3: true, payoutTop2: true, payoutBottom2: true,
         payoutRunTop: true, payoutRunBottom: true,
         top3: true, bottom2: true,
-      }
+      },
     });
 
     const payout = {
@@ -138,6 +148,9 @@ export async function GET(req: Request) {
       RUN_BOTTOM: ps?.payoutRunBottom ?? 4,
     } as Record<Cat, number>;
 
+    // =====================================================
+    // 5) Prize คิดจาก "รายการจริง" ของ AcceptSelf/ExcessBuy (ไม่ใช้ inflow-send)
+    // =====================================================
     let prizeSelfTotal = 0;
     let prizeDealerTotal = 0;
 
@@ -147,27 +160,64 @@ export async function GET(req: Request) {
     if (ps) {
       const win = buildWinningSets({ top3: ps.top3, bottom2: ps.bottom2 });
 
-      for (const r of baseRows) {
-        const kept = Math.max(0, r.inflow - r.send);
-        if (kept > 0 && win[r.category].has(r.number)) {
-          const value = kept * payout[r.category];
-          prizeSelfTotal += value;
-          prizeSelfByCat.set(r.category, (prizeSelfByCat.get(r.category) || 0) + value);
-        }
+      // ---- self: อ่านจาก AcceptSelf ----
+      const acceptDetail = await prisma.$queryRaw<{
+        category: Cat;
+        number: string;
+        amount: number;
+      }[]>`
+        SELECT
+          a.category AS "category",
+          a.number   AS "number",
+          COALESCE(SUM(a.amount),0)::float AS "amount"
+        FROM "AcceptSelf" a
+        WHERE a."createdAt" >= ${from} AND a."createdAt" < ${to}
+        GROUP BY a.category, a.number
+      `;
 
-        if (r.send > 0 && win[r.category].has(r.number)) {
-          const value = r.send * payout[r.category];
-          prizeDealerTotal += value;
-          prizeDealerByCat.set(r.category, (prizeDealerByCat.get(r.category) || 0) + value);
+      for (const r of acceptDetail) {
+        const amt = Number(r.amount) || 0;
+        if (amt > 0 && win[r.category].has(r.number)) {
+          const val = amt * payout[r.category];
+          prizeSelfTotal += val;
+          prizeSelfByCat.set(r.category, (prizeSelfByCat.get(r.category) || 0) + val);
+        }
+      }
+
+      // ---- dealer: อ่านจาก ExcessBuy ----
+      const sendDetail = await prisma.$queryRaw<{
+        category: Cat;
+        number: string;
+        amount: number;
+      }[]>`
+        SELECT
+          p.category AS "category",
+          p.number   AS "number",
+          COALESCE(SUM(ex.amount),0)::float AS "amount"
+        FROM "ExcessBuy" ex
+        JOIN "SettleBatch" b ON b.id = ex."batchId"
+        JOIN "Product" p     ON p.id = ex."productId"
+        WHERE b."from" >= ${from} AND b."to" <= ${to}
+        GROUP BY p.category, p.number
+      `;
+
+      for (const r of sendDetail) {
+        const amt = Number(r.amount) || 0;
+        if (amt > 0 && win[r.category].has(r.number)) {
+          const val = amt * payout[r.category];
+          prizeDealerTotal += val;
+          prizeDealerByCat.set(r.category, (prizeDealerByCat.get(r.category) || 0) + val);
         }
       }
     }
 
-    /** สร้าง rows สำหรับ frontend */
-    const rows = [];
+    // =====================================================
+    // 6) rows สำหรับ frontend (เหมือนเดิม)
+    // =====================================================
+    const rows: any[] = [];
     for (const cat of CATS) {
       const inflow = inflowByCat.get(cat) || 0;
-      const keep = keepByCat.get(cat) || 0;
+      const keep = acceptByCat.get(cat) || 0;   // ✅ CHANGED: acceptSelf จาก AcceptSelf
       const send = sendByCat.get(cat) || 0;
       const pSelf = prizeSelfByCat.get(cat) || 0;
       const pDeal = prizeDealerByCat.get(cat) || 0;
