@@ -30,12 +30,12 @@ const DEFAULT_DISCOUNT_PCT: Record<Cat, number> = {
 
 // ===== LOSS_MAX ต่อหมวด (ตามที่คุณกำหนดล่าสุด) =====
 const LOSS_MAX: Record<Cat, number> = {
-  TOP3: 15000,
-  TOD3: 15000,
-  TOP2: 500,
-  BOTTOM2: 3000,
-  RUN_TOP: 1000,
-  RUN_BOTTOM: 1000,
+  TOP3: 16800,
+  TOD3: 1000,
+  TOP2: 3200,
+  BOTTOM2: 8000,
+  RUN_TOP: 470,
+  RUN_BOTTOM: 700,
 };
 
 /** สร้าง permutations ของเลข 3 หลักแบบไม่ซ้ำ */
