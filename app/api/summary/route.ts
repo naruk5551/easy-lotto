@@ -330,6 +330,34 @@ export async function GET(req: Request) {
           prizeSelfByCat.set(cat, (prizeSelfByCat.get(cat) || 0) + val);
         }
       }
+      // ===============================
+      // ✅ ADD: dealer prize calculation
+      // ===============================
+      const dealerRaw = await prisma.$queryRaw<
+        { category: Cat; number: string; amount: number }[]
+      >`
+        SELECT
+          p.category AS "category",
+          p.number   AS "number",
+          COALESCE(SUM(ex.amount),0)::float AS "amount"
+        FROM "ExcessBuy" ex
+        JOIN "SettleBatch" b ON b.id = ex."batchId"
+        JOIN "Product" p     ON p.id = ex."productId"
+        WHERE b."from" >= ${from} AND b."to" <= ${to}
+        GROUP BY p.category, p.number
+      `;
+
+      for (const r of dealerRaw) {
+        if (!r.amount || r.amount <= 0) continue;
+        if (win[r.category].has(r.number)) {
+          const val = r.amount * payout[r.category];
+          prizeDealerTotal += val;
+          prizeDealerByCat.set(
+            r.category,
+            (prizeDealerByCat.get(r.category) || 0) + val
+          );
+        }
+      }
 
       // dealer: ตอนนี้ยังไม่ได้คำนวณรายเลข (เหมือนเดิมของคุณ)
       // (ถ้าจะทำให้แม่นรายเลข ต้องสร้าง sendByKey จาก ExcessBuy เพิ่มภายหลัง)
