@@ -14,8 +14,8 @@ const PAYOUT: Record<Cat, number> = {
   TOD3: 100,
   TOP2: 70,
   BOTTOM2: 70,
-  RUN_TOP: 3,
-  RUN_BOTTOM: 4,
+  RUN_TOP: 9,
+  RUN_BOTTOM: 8,
 };
 
 // ===== default ส่วนลด (%) =====
@@ -34,8 +34,8 @@ const LOSS_MAX: Record<Cat, number> = {
   TOD3: 1000,
   TOP2: 3200,
   BOTTOM2: 8000,
-  RUN_TOP: 470,
-  RUN_BOTTOM: 700,
+  RUN_TOP: 1500,
+  RUN_BOTTOM: 1500,
 };
 
 /** สร้าง permutations ของเลข 3 หลักแบบไม่ซ้ำ */
