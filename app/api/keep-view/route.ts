@@ -255,9 +255,14 @@ export async function GET(req: NextRequest) {
 
     for (const k of allKeys) {
       const [cat, number] = k.split('|') as [Category, string];
+
+      // ✅ ถ้าแปลงโต๊ด → 3 ตัวบน ให้ซ่อน TOD3 ใน keep-view
+      if (capRow.convertTod3ToTop3 && cat === 'TOD3') continue;
+
       const infl = inflowByKey.get(k) || 0;
       const keep = keepDeltaByKey.get(k) || 0;
       if (!infl && !keep) continue;
+
       allRows.push({ category: cat, number, inflow: infl, keep });
     }
 

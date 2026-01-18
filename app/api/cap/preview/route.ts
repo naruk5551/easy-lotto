@@ -50,11 +50,11 @@ const DEFAULT_DISCOUNT_PCT: Record<Cat, number> = {
 
 // ===== LOSS_MAX ต่อหมวด (ตามที่คุณกำหนดล่าสุด) =====
 const LOSS_MAX: Record<Cat, number> = {
-  TOP3: 16800,
-  TOD3: 1000,
-  TOP2: 3200,
-  BOTTOM2: 8000,
-  RUN_TOP: 1500,
+  TOP3: 20000,
+  TOD3: 0,
+  TOP2: 3000,
+  BOTTOM2: 10000,
+  RUN_TOP: 2000,
   RUN_BOTTOM: 1500,
 };
 

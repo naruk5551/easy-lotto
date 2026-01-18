@@ -324,6 +324,10 @@ export async function GET(req: Request) {
       // self (ใช้ acceptByKey)
       for (const [k, kept] of acceptByKey) {
         const [cat, num] = k.split('|') as [Cat, string];
+
+        // ✅ แปลงโต๊ด → ตรง : ไม่มีถูกรางวัล TOD3
+        if (capRow.convertTod3ToTop3 && cat === 'TOD3') continue;
+
         if (win[cat].has(num)) {
           const val = kept * payout[cat];
           prizeSelfTotal += val;
@@ -349,6 +353,9 @@ export async function GET(req: Request) {
 
       for (const r of dealerRaw) {
         if (!r.amount || r.amount <= 0) continue;
+        // ✅ แปลงโต๊ด → ตรง : ไม่มีถูกรางวัล TOD3
+        if (capRow.convertTod3ToTop3 && r.category === 'TOD3') continue;
+
         if (win[r.category].has(r.number)) {
           const val = r.amount * payout[r.category];
           prizeDealerTotal += val;
